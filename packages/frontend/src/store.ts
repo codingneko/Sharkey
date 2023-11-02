@@ -299,7 +299,7 @@ export const defaultStore = markRaw(new Storage('base', {
 	},
 	squareAvatars: {
 		where: 'device',
-		default: true,
+		default: false,
 	},
 	showAvatarDecorations: {
 		where: 'device',
