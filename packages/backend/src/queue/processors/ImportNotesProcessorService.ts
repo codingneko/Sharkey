@@ -1,13 +1,11 @@
 import * as fs from 'node:fs';
 import * as vm from 'node:vm';
 import { Inject, Injectable } from '@nestjs/common';
-import { IsNull } from 'typeorm';
 import { ZipReader } from 'slacc';
 import { DI } from '@/di-symbols.js';
-import type { UsersRepository, DriveFilesRepository, MiDriveFile, MiNote, NotesRepository } from '@/models/_.js';
+import type { UsersRepository, DriveFilesRepository, MiDriveFile, MiNote, NotesRepository, MiUser } from '@/models/_.js';
 import type Logger from '@/logger.js';
 import { DownloadService } from '@/core/DownloadService.js';
-import { UtilityService } from '@/core/UtilityService.js';
 import { bindThis } from '@/decorators.js';
 import { QueueService } from '@/core/QueueService.js';
 import { createTemp, createTempDir } from '@/misc/create-temp.js';
@@ -35,7 +33,6 @@ export class ImportNotesProcessorService {
 		private notesRepository: NotesRepository,
 
 		private queueService: QueueService,
-		private utilityService: UtilityService,
 		private noteCreateService: NoteCreateService,
 		private mfmService: MfmService,
 		private apNoteService: ApNoteService,
@@ -47,9 +44,9 @@ export class ImportNotesProcessorService {
 	}
 
 	@bindThis
-	private async uploadFiles(dir: any, user: any) {
+	private async uploadFiles(dir: string, user: MiUser) {
 		const fileList = fs.readdirSync(dir);
-		for (const file of fileList) {
+		for await (const file of fileList) {
 			const name = `${dir}/${file}`;
 			if (fs.statSync(name).isDirectory()) {
 				await this.uploadFiles(name, user);
@@ -69,27 +66,39 @@ export class ImportNotesProcessorService {
 		}
 	}
 
-	// Function was taken from Firefish and edited to remove renoteId and make it run in only one for loop instead of two
+	// Function was taken from Firefish and modified for our needs
 	@bindThis
-	private async recreateChain(arr: any[]) {
+	private async recreateChain(idField: string, replyField: string, arr: any[]): Promise<any[]> {
 		type NotesMap = {
 			[id: string]: any;
 		};
 		const notesTree: any[] = [];
-		const lookup: NotesMap = {};
+		const noteById: NotesMap = {};
+		const notesWaitingForParent: NotesMap = {};
+
 		for await (const note of arr) {
-			lookup[`${note.id}`] = note;
+			noteById[note[idField]] = note;
 			note.childNotes = [];
-			let parent = null;
-			
-			if (note.replyId == null) {
-				notesTree.push(note);
-			} else {
-				parent = lookup[`${note.replyId}`];
+
+			const children = notesWaitingForParent[note[idField]];
+			if (children) {
+				note.childNotes.push(...children);
 			}
 
-			if (parent) parent.childNotes.push(note);
+			if (note[replyField] == null) {
+				notesTree.push(note);
+				continue;
+			}
+
+			const parent = noteById[note[replyField]];
+			if (parent) {
+				parent.childNotes.push(note);
+			} else {
+				notesWaitingForParent[note[replyField]] ||= [];
+				notesWaitingForParent[note[replyField]].push(note);
+			}
 		}
+
 		return notesTree;
 	}
 
@@ -155,7 +164,36 @@ export class ImportNotesProcessorService {
 				const tweets = Object.keys(fakeWindow.window.YTD.tweets.part0).reduce((m, key, i, obj) => {
 					return m.concat(fakeWindow.window.YTD.tweets.part0[key].tweet);
 				}, []);
-				this.queueService.createImportTweetsToDbJob(job.data.user, tweets);
+				const processedTweets = await this.recreateChain("id_str", "in_reply_to_status_id_str", tweets);
+				this.queueService.createImportTweetsToDbJob(job.data.user, processedTweets, null);
+			} finally {
+				cleanup();
+			}
+		} else if (type === 'Facebook' || file.name.startsWith('facebook-') && file.name.endsWith('.zip')) {
+			const [path, cleanup] = await createTempDir();
+
+			this.logger.info(`Temp dir is ${path}`);
+
+			const destPath = path + '/facebook.zip';
+
+			try {
+				fs.writeFileSync(destPath, '', 'binary');
+				await this.downloadService.downloadUrl(file.url, destPath);
+			} catch (e) { // TODO: 何度か再試行
+				if (e instanceof Error || typeof e === 'string') {
+					this.logger.error(e);
+				}
+				throw e;
+			}
+
+			const outputPath = path + '/facebook';
+			try {
+				this.logger.succ(`Unzipping to ${outputPath}`);
+				ZipReader.withDestinationPath(outputPath).viaBuffer(await fs.promises.readFile(destPath));
+				const postsJson = fs.readFileSync(outputPath + '/your_activity_across_facebook/posts/your_posts__check_ins__photos_and_videos_1.json', 'utf-8');
+				const posts = JSON.parse(postsJson);
+				await this.uploadFiles(outputPath + '/your_activity_across_facebook/posts/media', user);
+				this.queueService.createImportFBToDbJob(job.data.user, posts);
 			} finally {
 				cleanup();
 			}
@@ -222,7 +260,7 @@ export class ImportNotesProcessorService {
 
 			const notesJson = fs.readFileSync(path, 'utf-8');
 			const notes = JSON.parse(notesJson);
-			const processedNotes = await this.recreateChain(notes);
+			const processedNotes = await this.recreateChain("id", "replyId", notes);
 			this.queueService.createImportKeyNotesToDbJob(job.data.user, processedNotes, null);
 			cleanup();
 		}
@@ -430,14 +468,14 @@ export class ImportNotesProcessorService {
 	}
 
 	@bindThis
-	public async processTwitterDb(job: Bull.Job<DbNoteImportToDbJobData>): Promise<void> {
+	public async processTwitterDb(job: Bull.Job<DbKeyNoteImportToDbJobData>): Promise<void> {
 		const tweet = job.data.target;
 		const user = await this.usersRepository.findOneBy({ id: job.data.user.id });
 		if (user == null) {
 			return;
 		}
 
-		if (tweet.in_reply_to_status_id_str) return;
+		const parentNote = job.data.note ? await this.notesRepository.findOneBy({ id: job.data.note }) : null;
 
 		async function replaceTwitterUrls(full_text: string, urls: any) {
 			let full_textedit = full_text;
@@ -458,9 +496,9 @@ export class ImportNotesProcessorService {
 		try {
 			const date = new Date(tweet.created_at);
 			const textReplaceURLs = tweet.entities.urls && tweet.entities.urls.length > 0 ? await replaceTwitterUrls(tweet.full_text, tweet.entities.urls) : tweet.full_text;
-			const text = tweet.entities.user_mentions && tweet.entities.user_mentions.length > 0 ? await replaceTwitterMentions(textReplaceURLs, tweet.entities.user_mentions) : textReplaceURLs; 
+			const text = tweet.entities.user_mentions && tweet.entities.user_mentions.length > 0 ? await replaceTwitterMentions(textReplaceURLs, tweet.entities.user_mentions) : textReplaceURLs;
 			const files: MiDriveFile[] = [];
-			
+
 			if (tweet.extended_entities && this.isIterable(tweet.extended_entities.media)) {
 				for await (const file of tweet.extended_entities.media) {
 					if (file.video_info) {
@@ -516,9 +554,53 @@ export class ImportNotesProcessorService {
 					}
 				}
 			}
-			await this.noteCreateService.import(user, { createdAt: date, text: text, files: files });
+			const createdNote = await this.noteCreateService.import(user, { createdAt: date, reply: parentNote, text: text, files: files });
+			if (tweet.childNotes) this.queueService.createImportTweetsToDbJob(user, tweet.childNotes, createdNote.id);
 		} catch (e) {
 			this.logger.warn(`Error: ${e}`);
 		}
+	}
+
+	@bindThis
+	public async processFBDb(job: Bull.Job<DbNoteImportToDbJobData>): Promise<void> {
+		const post = job.data.target;
+		const user = await this.usersRepository.findOneBy({ id: job.data.user.id });
+		if (user == null) {
+			return;
+		}
+
+		if (!this.isIterable(post.data) || this.isIterable(post.data) && post.data[0].post === undefined) return;
+
+		const date = new Date(post.timestamp * 1000);
+		const title = decodeFBString(post.data[0].post);
+		const files: MiDriveFile[] = [];
+
+		function decodeFBString(str: string) {
+			const arr = [];
+			for (let i = 0; i < str.length; i++) {
+				arr.push(str.charCodeAt(i));
+			}
+			return Buffer.from(arr).toString('utf8');
+		}
+
+		if (post.attachments && this.isIterable(post.attachments)) {
+			const media = [];
+			for await (const data of post.attachments[0].data) {
+				if (data.media) {
+					media.push(data.media);
+				}
+			}
+
+			for await (const file of media) {
+				const slashdex = file.uri.lastIndexOf('/');
+				const name = file.uri.substring(slashdex + 1);
+				const exists = await this.driveFilesRepository.findOneBy({ name: name, userId: user.id });
+				if (exists) {
+					files.push(exists);
+				}
+			}
+		}
+
+		await this.noteCreateService.import(user, { createdAt: date, text: title, files: files });
 	}
 }

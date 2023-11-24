@@ -12,7 +12,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<MkNoteHeader :class="$style.header" :note="note" :mini="true"/>
 			<div :class="$style.content">
 				<p v-if="note.cw != null" :class="$style.cw">
-					<Mfm v-if="note.cw != ''" style="margin-right: 8px;" :text="note.cw" :author="note.user" :nyaize="'account'"/>
+					<Mfm v-if="note.cw != ''" style="margin-right: 8px;" :text="note.cw" :author="note.user" :nyaize="'respect'"/>
 					<MkCwButton v-model="showContent" :note="note"/>
 				</p>
 				<div v-show="note.cw == null || showContent">
@@ -110,7 +110,6 @@ const canRenote = computed(() => ['public', 'home'].includes(props.note.visibili
 
 const props = withDefaults(defineProps<{
 	note: Misskey.entities.Note;
-	meta: Misskey.entities.LiteInstanceMetadata;
 	detail?: boolean;
 	expandAllCws?: boolean;
 
@@ -134,6 +133,7 @@ const menuButton = shallowRef<HTMLElement>();
 const likeButton = shallowRef<HTMLElement>();
 
 let appearNote = $computed(() => isRenote ? props.note.renote as Misskey.entities.Note : props.note);
+const defaultLike = computed(() => defaultStore.state.like !== '❤️' ? defaultStore.state.like : null);
 
 const isRenote = (
 	props.note.renote != null &&
@@ -187,9 +187,9 @@ function react(viaKeyboard = false): void {
 	pleaseLogin();
 	showMovedDialog();
 	if (props.note.reactionAcceptance === 'likeOnly') {
-		os.api('notes/reactions/create', {
+		os.api('notes/like', {
 			noteId: props.note.id,
-			reaction: props.meta.defaultLike,
+			override: defaultLike.value,
 		});
 		const el = reactButton.value as HTMLElement | null | undefined;
 		if (el) {
@@ -217,9 +217,9 @@ function react(viaKeyboard = false): void {
 function like(): void {
 	pleaseLogin();
 	showMovedDialog();
-	os.api('notes/reactions/create', {
+	os.api('notes/like', {
 		noteId: props.note.id,
-		reaction: props.meta.defaultLike,
+		override: defaultLike.value,
 	});
 	const el = reactButton.value as HTMLElement | null | undefined;
 	if (el) {
