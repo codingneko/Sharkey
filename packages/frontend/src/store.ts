@@ -188,7 +188,7 @@ export const defaultStore = markRaw(new Storage('base', {
 	},
 	serverDisconnectedBehavior: {
 		where: 'device',
-		default: 'quiet' as 'quiet' | 'reload' | 'dialog' | 'disabled',
+		default: 'disabled' as 'quiet' | 'dialog' | 'disabled',
 	},
 	nsfw: {
 		where: 'device',
@@ -247,6 +247,10 @@ export const defaultStore = markRaw(new Storage('base', {
 		default: false,
 	},
 	showFixedPostFormInChannel: {
+		where: 'device',
+		default: false,
+	},
+	showTickerOnReplies: {
 		where: 'device',
 		default: false,
 	},

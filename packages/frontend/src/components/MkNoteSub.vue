@@ -5,11 +5,12 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <div v-if="!muted" ref="el" :class="[$style.root, { [$style.children]: depth > 1 }]">
+	<div v-if="!hideLine" :class="$style.line"></div>
 	<div :class="$style.main">
 		<div v-if="note.channel" :class="$style.colorBar" :style="{ background: note.channel.color }"></div>
 		<MkAvatar :class="$style.avatar" :user="note.user" link preview/>
 		<div :class="$style.body">
-			<MkNoteHeader :class="$style.header" :note="note" :mini="true"/>
+			<MkNoteHeader :class="$style.header" :note="note" :classic="true" :mini="true"/>
 			<div :class="$style.content">
 				<p v-if="note.cw != null" :class="$style.cw">
 					<Mfm v-if="note.cw != ''" style="margin-right: 8px;" :text="note.cw" :author="note.user" :nyaize="'respect'"/>
@@ -41,8 +42,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 					ref="quoteButton"
 					class="_button"
 					:class="$style.noteFooterButton"
-					:style="quoted ? 'color: var(--accent) !important;' : ''"
-					@mousedown="quoted ? undoQuote() : quote()"
+					@mousedown="quote()"
 				>
 					<i class="ph-quotes ph-bold ph-lg"></i>
 				</button>
@@ -107,6 +107,7 @@ import { getNoteMenu } from '@/scripts/get-note-menu.js';
 import { useNoteCapture } from '@/scripts/use-note-capture.js';
 
 const canRenote = computed(() => ['public', 'home'].includes(props.note.visibility) || props.note.userId === $i.id);
+const hideLine = computed(() => { return props.detail ? true : false; });
 
 const props = withDefaults(defineProps<{
 	note: Misskey.entities.Note;
@@ -125,7 +126,6 @@ const translation = ref<any>(null);
 const translating = ref(false);
 const isDeleted = ref(false);
 const renoted = ref(false);
-const quoted = ref(false);
 const reactButton = shallowRef<HTMLElement>();
 const renoteButton = shallowRef<HTMLElement>();
 const quoteButton = shallowRef<HTMLElement>();
@@ -155,15 +155,6 @@ if ($i) {
 		limit: 1,
 	}).then((res) => {
 		renoted.value = res.length > 0;
-	});
-
-	os.api("notes/renotes", {
-		noteId: appearNote.id,
-		userId: $i.id,
-		limit: 1,
-		quote: true,
-	}).then((res) => {
-		quoted.value = res.length > 0;
 	});
 }
 
@@ -255,23 +246,6 @@ function undoRenote() : void {
 	}
 }
 
-function undoQuote() : void {
-	os.api("notes/unrenote", {
-		noteId: appearNote.id,
-		quote: true
-	});
-	os.toast(i18n.ts.rmquote);
-	quoted.value = false;
-
-	const el = quoteButton.value as HTMLElement | null | undefined;
-	if (el) {
-		const rect = el.getBoundingClientRect();
-		const x = rect.left + (el.offsetWidth / 2);
-		const y = rect.top + (el.offsetHeight / 2);
-		os.popup(MkRippleEffect, { x, y }, {}, 'end');
-	}
-}
-
 let showContent = $ref(false);
 
 watch(() => props.expandAllCws, (expandAllCws) => {
@@ -342,7 +316,6 @@ function quote() {
 					os.popup(MkRippleEffect, { x, y }, {}, 'end');
 				}
 
-				quoted.value = res.length > 0;
 				os.toast(i18n.ts.quoted);
 			});
 		});
@@ -365,7 +338,6 @@ function quote() {
 					os.popup(MkRippleEffect, { x, y }, {}, 'end');
 				}
 
-				quoted.value = res.length > 0;
 				os.toast(i18n.ts.quoted);
 			});
 		});
@@ -391,7 +363,7 @@ if (props.detail) {
 
 <style lang="scss" module>
 .root {
-	padding: 16px 32px;
+	padding: 28px 32px;
 	font-size: 0.9em;
 	position: relative;
 
@@ -401,12 +373,20 @@ if (props.detail) {
 	}
 }
 
+.line {
+	position: absolute;
+	height: 100%;
+	left: 60px;
+	// using solid instead of dotted, stylelistic choice
+	border-left: 2.5px solid rgb(174, 174, 174);
+}
+
 .footer {
-		position: relative;
-		z-index: 1;
-		margin-top: 0.4em;
-		width: max-content;
-		min-width: max-content;
+	position: relative;
+	z-index: 1;
+	margin-top: 0.4em;
+	width: max-content;
+	min-width: max-content;
 }
 
 .main {
@@ -426,9 +406,9 @@ if (props.detail) {
 .avatar {
 	flex-shrink: 0;
 	display: block;
-	margin: 0 8px 0 0;
-	width: 38px;
-	height: 38px;
+	margin: 0 14px 0 0;
+	width: 58px;
+	height: 58px;
 	border-radius: var(--radius-sm);
 }
 
@@ -439,6 +419,11 @@ if (props.detail) {
 
 .content {
 	overflow: hidden;
+}
+
+.text {
+	margin: 0;
+	padding: 0;
 }
 
 .header {
@@ -457,6 +442,36 @@ if (props.detail) {
 
 	&:hover {
 		color: var(--fgHighlighted);
+	}
+}
+
+.reply, .more {
+	border-left: solid 0.5px var(--divider);
+	margin-top: 10px;
+}
+
+.more {
+	padding: 10px 0 0 16px;
+}
+
+@container (max-width: 580px) {
+	.root {
+		padding: 28px 26px 0;
+	}
+
+	.line {
+		left: 50.5px;
+	}
+
+	.avatar {
+		width: 50px;
+		height: 50px;
+	}
+}
+
+@container (max-width: 500px) {
+	.root {
+		padding: 23px 25px;
 	}
 }
 
@@ -499,13 +514,24 @@ if (props.detail) {
 	padding: 10px 0 0 16px;
 }
 
-@container (max-width: 450px) {
+@container (max-width: 480px) {
 	.root {
-		padding: 14px 16px;
+		padding: 22px 24px;
 
 		&.children {
 			padding: 10px 0 0 8px;
 		}
+	}
+}
+
+@container (max-width: 450px) {
+	.line {
+		left: 46px;
+	}
+
+	.avatar {
+		width: 46px;
+		height: 46px;
 	}
 }
 

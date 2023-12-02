@@ -11,13 +11,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 	v-hotkey="keymap"
 	:class="$style.root"
 >
-	<div v-if="appearNote.reply && appearNote.reply.replyId">
-		<div v-if="!conversationLoaded" style="padding: 16px">
-			<MkButton style="margin: 0 auto;" primary rounded @click="loadConversation">{{ i18n.ts.loadConversation }}</MkButton>
-		</div>
-		<MkNoteSub v-for="note in conversation" :key="note.id" :class="$style.replyToMore" :note="note" :expandAllCws="props.expandAllCws"/>
+	<div v-if="appearNote.reply && appearNote.reply.replyId && !conversationLoaded" style="padding: 16px">
+		<MkButton style="margin: 0 auto;" primary rounded @click="loadConversation">{{ i18n.ts.loadConversation }}</MkButton>
 	</div>
-	<MkNoteSub v-if="appearNote.reply" :note="appearNote.reply" :class="$style.replyTo" :expandAllCws="props.expandAllCws"/>
 	<div v-if="isRenote" :class="$style.renote">
 		<MkAvatar :class="$style.renoteAvatar" :user="note.user" link preview/>
 		<i class="ph-rocket-launch ph-bold ph-lg" style="margin-right: 4px;"></i>
@@ -43,15 +39,29 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<span v-if="note.localOnly" style="margin-left: 0.5em;" :title="i18n.ts._visibility['disableFederation']"><i class="ph-rocket ph-bold ph-lg"></i></span>
 		</div>
 	</div>
+	<template v-if="appearNote.reply && appearNote.reply.replyId">
+		<MkNoteSub v-for="note in conversation" :key="note.id" :class="$style.replyToMore" :note="note" :expandAllCws="props.expandAllCws"/>
+	</template>
+	<MkNoteSub v-if="appearNote.reply" :note="appearNote.reply" :class="$style.replyTo" :expandAllCws="props.expandAllCws"/>
 	<article :class="$style.note" @contextmenu.stop="onContextmenu">
 		<header :class="$style.noteHeader">
 			<MkAvatar :class="$style.noteHeaderAvatar" :user="appearNote.user" indicator link preview/>
-			<div :class="$style.noteHeaderBody">
-				<div>
-					<MkA v-user-preview="appearNote.user.id" :class="$style.noteHeaderName" :to="userPage(appearNote.user)">
-						<MkUserName :nowrap="false" :user="appearNote.user"/>
-					</MkA>
-					<span v-if="appearNote.user.isBot" :class="$style.isBot">bot</span>
+			<div style="display: flex; align-items: center; white-space: nowrap; overflow: hidden;">
+				<div :class="$style.noteHeaderBody">
+					<div>
+						<MkA v-user-preview="appearNote.user.id" :class="$style.noteHeaderName" :to="userPage(appearNote.user)">
+							<MkUserName :nowrap="false" :user="appearNote.user"/>
+						</MkA>
+						<span v-if="appearNote.user.isBot" :class="$style.isBot">bot</span>
+						<span v-if="appearNote.user.badgeRoles" :class="$style.badgeRoles">
+							<img v-for="role in appearNote.user.badgeRoles" :key="role.id" v-tooltip="role.name" :class="$style.badgeRole" :src="role.iconUrl"/>
+						</span>
+					</div>
+					<div :class="$style.noteHeaderUsername"><MkAcct :user="appearNote.user"/></div>
+				</div>
+			</div>
+			<div style="display: flex; align-items: flex-end; margin-left: auto;">
+				<div :class="$style.noteHeaderBody">
 					<div :class="$style.noteHeaderInfo">
 						<span v-if="appearNote.visibility !== 'public'" style="margin-left: 0.5em;" :title="i18n.ts._visibility[appearNote.visibility]">
 							<i v-if="appearNote.visibility === 'home'" class="ph-house ph-bold ph-lg"></i>
@@ -61,9 +71,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<span v-if="appearNote.updatedAt" ref="menuVersionsButton" style="margin-left: 0.5em;" title="Edited" @mousedown="menuVersions()"><i class="ph-pencil ph-bold ph-lg"></i></span>
 						<span v-if="appearNote.localOnly" style="margin-left: 0.5em;" :title="i18n.ts._visibility['disableFederation']"><i class="ph-rocket ph-bold ph-lg"></i></span>
 					</div>
+					<MkInstanceTicker v-if="showTicker" :instance="appearNote.user.instance"/>
 				</div>
-				<div :class="$style.noteHeaderUsername"><MkAcct :user="appearNote.user"/></div>
-				<MkInstanceTicker v-if="showTicker" :instance="appearNote.user.instance"/>
 			</div>
 		</header>
 		<div :class="$style.noteContent">
@@ -73,7 +82,6 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</p>
 			<div v-show="appearNote.cw == null || showContent">
 				<span v-if="appearNote.isHidden" style="opacity: 0.5">({{ i18n.ts.private }})</span>
-				<MkA v-if="appearNote.replyId" :class="$style.noteReplyTarget" :to="`/notes/${appearNote.replyId}`"><i class="ph-arrow-bend-left-up ph-bold ph-lg"></i></MkA>
 				<Mfm
 					v-if="appearNote.text"
 					:parsedNodes="parsed"
@@ -137,8 +145,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				ref="quoteButton"
 				class="_button"
 				:class="$style.noteFooterButton"
-				:style="quoted ? 'color: var(--accent) !important;' : ''"
-				@mousedown="quoted ? undoQuote() : quote()"
+				@mousedown="quote()"
 			>
 				<i class="ph-quotes ph-bold ph-lg"></i>
 			</button>
@@ -310,7 +317,6 @@ const isMyRenote = $i && ($i.id === note.userId);
 const showContent = ref(false);
 const isDeleted = ref(false);
 const renoted = ref(false);
-const quoted = ref(false);
 const muted = ref($i ? checkWordMute(appearNote, $i, $i.mutedWords) : false);
 const translation = ref(null);
 const translating = ref(false);
@@ -336,15 +342,6 @@ if ($i) {
 		limit: 1,
 	}).then((res) => {
 		renoted.value = res.length > 0;
-	});
-
-	os.api("notes/renotes", {
-		noteId: appearNote.id,
-		userId: $i.id,
-		limit: 1,
-		quote: true,
-	}).then((res) => {
-		quoted.value = res.length > 0;
 	});
 }
 
@@ -475,7 +472,7 @@ function renote() {
 		if (appearNote.channel?.isSensitive) {
 			visibility = smallerVisibility(visibility, 'home');
 		}
-		
+
 		os.api('notes/create', {
 			localOnly,
 			visibility,
@@ -511,7 +508,6 @@ function quote() {
 					os.popup(MkRippleEffect, { x, y }, {}, 'end');
 				}
 
-				quoted.value = res.length > 0;
 				os.toast(i18n.ts.quoted);
 			});
 		});
@@ -534,7 +530,6 @@ function quote() {
 					os.popup(MkRippleEffect, { x, y }, {}, 'end');
 				}
 
-				quoted.value = res.length > 0;
 				os.toast(i18n.ts.quoted);
 			});
 		});
@@ -617,23 +612,6 @@ function undoRenote() : void {
 	renoted.value = false;
 
 	const el = renoteButton.value as HTMLElement | null | undefined;
-	if (el) {
-		const rect = el.getBoundingClientRect();
-		const x = rect.left + (el.offsetWidth / 2);
-		const y = rect.top + (el.offsetHeight / 2);
-		os.popup(MkRippleEffect, { x, y }, {}, 'end');
-	}
-}
-
-function undoQuote() : void {
-	os.api("notes/unrenote", {
-		noteId: appearNote.id,
-		quote: true
-	});
-	os.toast(i18n.ts.rmquote);
-	quoted.value = false;
-
-	const el = quoteButton.value as HTMLElement | null | undefined;
 	if (el) {
 		const rect = el.getBoundingClientRect();
 		const x = rect.left + (el.offsetWidth / 2);
@@ -774,7 +752,8 @@ function animatedMFM() {
 		z-index: 1;
 		margin-top: 0.4em;
 		width: max-content;
-		min-width: max-content;
+		min-width: min-content;
+		max-width: fit-content;
 }
 
 .replyTo {
@@ -880,12 +859,19 @@ function animatedMFM() {
 
 .noteHeaderInfo {
 	float: right;
+	text-align: right;
 }
 
 .noteHeaderUsername {
 	margin-bottom: 2px;
 	line-height: 1.3;
 	word-wrap: anywhere;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+
+	&::-webkit-scrollbar {
+		display: none;
+	}
 }
 
 .playMFMButton {
@@ -1066,9 +1052,31 @@ function animatedMFM() {
 	}
 }
 
+.avatar {
+	flex-shrink: 0 !important;
+	display: block !important;
+	margin: 0 10px 0 0 !important;
+	width: 40px !important;
+	height: 40px !important;
+	border-radius: var(--radius-sm) !important;
+}
+
 .muted {
 	padding: 8px;
 	text-align: center;
 	opacity: 0.7;
+}
+
+.badgeRoles {
+	margin: 0 .5em 0 0;
+}
+
+.badgeRole {
+	height: 1.3em;
+	vertical-align: -20%;
+
+	& + .badgeRole {
+		margin-left: 0.2em;
+	}
 }
 </style>
