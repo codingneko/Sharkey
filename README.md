@@ -28,6 +28,6 @@
 <div>
 	
 # Repo is being Moved
-We are moving the repo to https://git.joinsharkey.org/Sharkey/Sharkey
+Sharkey's original upstream was moved to their own git system on https://git.joinsharkey.org/Sharkey/Sharkey
 
-This was decided after a poll (https://shonk.social/notes/9n0hicilz5a501gu)
+I will try to keep this repo up to date with Sharkey's upstream.
