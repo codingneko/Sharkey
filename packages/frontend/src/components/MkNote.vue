@@ -47,14 +47,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<Mfm :text="getNoteSummary(appearNote)" :plain="true" :nowrap="true" :author="appearNote.user" :nyaize="'respect'" :class="$style.collapsedRenoteTargetText" @click="renoteCollapsed = false"/>
 	</div>
 	<article v-else :class="$style.article" @contextmenu.stop="onContextmenu">
-		<div style="display: flex; padding-bottom: 10px;">
-			<div v-if="appearNote.channel" :class="$style.colorBar" :style="{ background: appearNote.channel.color }"></div>
-			<MkAvatar :class="[$style.avatar, { [$style.avatarReplyTo]: appearNote.reply }]" :user="appearNote.user" :link="!mock" :preview="!mock"/>
-			<div :class="$style.main">
-				<MkNoteHeader :note="appearNote" :mini="true"/>
-			</div>
-		</div>
-		<div :class="[{ [$style.clickToOpen]: defaultStore.state.clickToOpen }]" @click="defaultStore.state.clickToOpen ? noteclick(appearNote.id) : undefined">
+		<div v-if="appearNote.channel" :class="$style.colorBar" :style="{ background: appearNote.channel.color }"></div>
+		<MkAvatar :class="$style.avatar" :user="appearNote.user" :link="!mock" :preview="!mock"/>
+		<div :class="[$style.main, { [$style.clickToOpen]: defaultStore.state.clickToOpen }]" @click="defaultStore.state.clickToOpen ? noteclick(appearNote.id) : undefined">
+			<MkNoteHeader :note="appearNote" :mini="true" v-on:click.stop/>
+			<MkInstanceTicker v-if="showTicker" :instance="appearNote.user.instance"/>
 			<div style="container-type: inline-size;">
 				<p v-if="appearNote.cw != null" :class="$style.cw">
 					<Mfm v-if="appearNote.cw != ''" style="margin-right: 8px;" :text="appearNote.cw" :author="appearNote.user" :nyaize="'respect'"/>
@@ -63,6 +60,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<div v-show="appearNote.cw == null || showContent" :class="[{ [$style.contentCollapsed]: collapsed }]" >
 					<div :class="$style.text">
 						<span v-if="appearNote.isHidden" style="opacity: 0.5">({{ i18n.ts.private }})</span>
+						<MkA v-if="appearNote.replyId" :class="$style.replyIcon" :to="`/notes/${appearNote.replyId}`"><i class="ph-arrow-bend-left-up ph-bold ph-lg"></i></MkA>
 						<Mfm
 							v-if="appearNote.text"
 							:parsedNodes="parsed"
@@ -116,7 +114,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 					class="_button"
 					:style="renoted ? 'color: var(--accent) !important;' : ''"
 					v-on:click.stop
-					@mousedown="renoted ? undoRenote(appearNote) : renote()"
+					@mousedown="renoted ? undoRenote(appearNote) : boostVisibility()"
 				>
 					<i class="ph-rocket-launch ph-bold ph-lg"></i>
 					<p v-if="appearNote.renoteCount > 0" :class="$style.footerButtonCount">{{ appearNote.renoteCount }}</p>
@@ -178,6 +176,7 @@ import MkCwButton from '@/components/MkCwButton.vue';
 import MkPoll from '@/components/MkPoll.vue';
 import MkUsersTooltip from '@/components/MkUsersTooltip.vue';
 import MkUrlPreview from '@/components/MkUrlPreview.vue';
+import MkInstanceTicker from '@/components/MkInstanceTicker.vue';
 import MkButton from '@/components/MkButton.vue';
 import { pleaseLogin } from '@/scripts/please-login.js';
 import { focusPrev, focusNext } from '@/scripts/focus.js';
@@ -272,13 +271,13 @@ const renoteUrl = appearNote.renote ? appearNote.renote.url : null;
 const renoteUri = appearNote.renote ? appearNote.renote.uri : null;
 
 const isMyRenote = $i && ($i.id === note.userId);
-const showContent = ref(false);
+const showContent = ref(defaultStore.state.uncollapseCW);
 const parsed = $computed(() => appearNote.text ? mfm.parse(appearNote.text) : null);
 const urls = $computed(() => parsed ? extractUrlFromMfm(parsed).filter(u => u !== renoteUrl && u !== renoteUri) : null);
 const animated = $computed(() => parsed ? checkAnimationFromMfm(parsed) : null);
 const allowAnim = ref(defaultStore.state.advancedMfm && defaultStore.state.animatedMfm ? true : false);
 const isLong = shouldCollapsed(appearNote, urls ?? []);
-const collapsed = ref(appearNote.cw == null && isLong);
+const collapsed = defaultStore.state.expandLongNote && appearNote.cw == null ? false : ref(appearNote.cw == null && isLong);
 const isDeleted = ref(false);
 const renoted = ref(false);
 const muted = ref($i ? checkWordMute(appearNote, $i, $i.mutedWords) : false);
@@ -380,7 +379,43 @@ function smallerVisibility(a: Visibility | string, b: Visibility | string): Visi
 	return 'public';
 }
 
-function renote() {
+function boostVisibility() {
+	os.popupMenu([
+		{
+			type: 'button',
+			icon: 'ph-globe-hemisphere-west ph-bold ph-lg',
+			text: i18n.ts._visibility['public'],
+			action: () => {
+				renote('public');
+			},
+		},
+		{
+			type: 'button',
+			icon: 'ph-house ph-bold ph-lg',
+			text: i18n.ts._visibility['home'],
+			action: () => {
+				renote('home');
+			},
+		},
+		{
+			type: 'button',
+			icon: 'ph-lock ph-bold ph-lg',
+			text: i18n.ts._visibility['followers'],
+			action: () => {
+				renote('followers');
+			},
+		},
+		{
+			type: 'button',
+			icon: 'ph-planet ph-bold ph-lg',
+			text: i18n.ts._timelines.local,
+			action: () => {
+				renote('local');
+			},
+		}], renoteButton.value);
+}
+
+function renote(visibility: Visibility | 'local') {
 	pleaseLogin();
 	showMovedDialog();
 
@@ -412,18 +447,17 @@ function renote() {
 		}
 
 		const configuredVisibility = defaultStore.state.rememberNoteVisibility ? defaultStore.state.visibility : defaultStore.state.defaultNoteVisibility;
-		const localOnly = defaultStore.state.rememberNoteVisibility ? defaultStore.state.localOnly : defaultStore.state.defaultNoteLocalOnly;
+		const localOnlySetting = defaultStore.state.rememberNoteVisibility ? defaultStore.state.localOnly : defaultStore.state.defaultNoteLocalOnly;
 
-		let visibility = appearNote.visibility;
-		visibility = smallerVisibility(visibility, configuredVisibility);
+		let noteVisibility = visibility === 'local' || visibility === 'specified' ? smallerVisibility(appearNote.visibility, configuredVisibility) : smallerVisibility(visibility, configuredVisibility);
 		if (appearNote.channel?.isSensitive) {
-			visibility = smallerVisibility(visibility, 'home');
+			noteVisibility = smallerVisibility(visibility === 'local' || visibility === 'specified' ? appearNote.visibility : visibility, 'home');
 		}
 
 		if (!props.mock) {
 			os.api('notes/create', {
-				localOnly,
-				visibility,
+				localOnly: visibility === 'local' ? true : localOnlySetting,
+				visibility: noteVisibility,
 				renoteId: appearNote.id,
 			}).then(() => {
 				os.toast(i18n.ts.renoted);
@@ -831,7 +865,7 @@ function emitUpdReaction(emoji: string, delta: number) {
 	position: relative;
 	display: flex;
 	align-items: center;
-	padding: 24px 38px 16px;
+	padding: 16px 32px 8px 32px;
 	line-height: 28px;
 	white-space: pre;
 	color: var(--renote);
@@ -883,7 +917,7 @@ function emitUpdReaction(emoji: string, delta: number) {
 	align-items: center;
 	line-height: 28px;
 	white-space: pre;
-	padding: 8px 38px 24px;
+	padding: 0 32px 18px;
 }
 
 .collapsedRenoteTargetAvatar {
@@ -910,6 +944,7 @@ function emitUpdReaction(emoji: string, delta: number) {
 
 .article {
 	position: relative;
+	display: flex;
 	padding: 28px 32px;
 }
 
@@ -926,19 +961,12 @@ function emitUpdReaction(emoji: string, delta: number) {
 .avatar {
 	flex-shrink: 0;
 	display: block !important;
-	position: sticky !important;
 	margin: 0 14px 0 0;
 	width: 58px;
 	height: 58px;
 	position: sticky !important;
 	top: calc(22px + var(--stickyTop, 0px));
 	left: 0;
-	transition: top 0.5s;
-
-	&.avatarReplyTo {
-		position: relative !important;
-		top: 0 !important;
-	}
 }
 
 .main {
@@ -1001,6 +1029,7 @@ function emitUpdReaction(emoji: string, delta: number) {
 
 .text {
 	overflow-wrap: break-word;
+	overflow: hidden;
 }
 
 .replyIcon {
@@ -1033,8 +1062,7 @@ function emitUpdReaction(emoji: string, delta: number) {
 
 .quoteNote {
 	padding: 16px;
-	// Made border solid, stylistic choice
-	border: solid 1px var(--renote);
+	border: dashed 1px var(--renote);
 	border-radius: var(--radius-sm);
 	overflow: clip;
 }
@@ -1074,11 +1102,7 @@ function emitUpdReaction(emoji: string, delta: number) {
 	}
 
 	.renote {
-		padding: 24px 28px 16px;
-	}
-
-	.collapsedRenoteTarget {
-		padding: 8px 28px 24px;
+		padding: 12px 26px 0 26px;
 	}
 
 	.article {
@@ -1096,8 +1120,12 @@ function emitUpdReaction(emoji: string, delta: number) {
 		font-size: 0.9em;
 	}
 
+	.renote {
+		padding: 10px 22px 0 22px;
+	}
+
 	.article {
-		padding: 23px 25px;
+		padding: 20px 22px;
 	}
 
 	.footer {
@@ -1107,7 +1135,7 @@ function emitUpdReaction(emoji: string, delta: number) {
 
 @container (max-width: 480px) {
 	.renote {
-		padding: 20px 24px 8px;
+		padding: 8px 16px 0 16px;
 	}
 
 	.tip {
@@ -1115,12 +1143,12 @@ function emitUpdReaction(emoji: string, delta: number) {
 	}
 
 	.collapsedRenoteTarget {
-		padding: 8px 24px 20px;
+		padding: 0 16px 9px;
 		margin-top: 4px;
 	}
 
 	.article {
-		padding: 22px 24px;
+		padding: 14px 16px;
 	}
 }
 

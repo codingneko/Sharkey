@@ -361,6 +361,7 @@ export type LiteInstanceMetadata = {
 	privacyPolicyUrl: string | null;
 	disableRegistration: boolean;
 	disableLocalTimeline: boolean;
+	disableBubbleTimeline: boolean;
 	disableGlobalTimeline: boolean;
 	driveCapacityPerLocalUserMb: number;
 	driveCapacityPerRemoteUserMb: number;
@@ -608,6 +609,7 @@ export type Instance = {
 	faviconUrl: string | null;
 	themeColor: string | null;
 	infoUpdatedAt: DateString | null;
+	isNSFW: boolean;
 };
 
 export type Signin = {

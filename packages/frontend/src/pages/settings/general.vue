@@ -47,7 +47,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<MkSwitch v-model="showClipButtonInNoteFooter">{{ i18n.ts.showClipButtonInNoteFooter }}</MkSwitch>
 				<MkSwitch v-model="collapseRenotes">{{ i18n.ts.collapseRenotes }}</MkSwitch>
 				<MkSwitch v-model="collapseFiles">{{ i18n.ts.collapseFiles }}</MkSwitch>
+				<MkSwitch v-model="uncollapseCW">Uncollapse CWs on notes</MkSwitch>
 				<MkSwitch v-model="autoloadConversation">{{ i18n.ts.autoloadConversation }}</MkSwitch>
+				<MkSwitch v-model="expandLongNote">Always expand long notes</MkSwitch>
 				<MkSwitch v-model="advancedMfm">{{ i18n.ts.enableAdvancedMfm }}</MkSwitch>
 				<MkSwitch v-if="advancedMfm" v-model="animatedMfm">{{ i18n.ts.enableAnimatedMfm }}</MkSwitch>
 				<MkSwitch v-model="showGapBetweenNotesInTimeline">{{ i18n.ts.showGapBetweenNotesInTimeline }}</MkSwitch>
@@ -58,6 +60,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<option value="small">{{ i18n.ts.small }}</option>
 					<option value="medium">{{ i18n.ts.medium }}</option>
 					<option value="large">{{ i18n.ts.large }}</option>
+				</MkRadios>
+				<MkRadios v-model="noteDesign">
+					<template #label>Note Design</template>
+					<option value="sharkey"><i class="sk-icons sk-shark ph-bold" style="top: 2px;position: relative;"></i> Sharkey</option>
+					<option value="misskey"><i class="sk-icons sk-misskey ph-bold" style="top: 2px;position: relative;"></i> Misskey</option>
 				</MkRadios>
 			</div>
 
@@ -82,6 +89,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<option value="1_1">{{ i18n.t('limitTo', { x: '1:1' }) }}</option>
 				<option value="2_3">{{ i18n.t('limitTo', { x: '2:3' }) }}</option>
 			</MkRadios>
+
+			<MkRange v-model="numberOfReplies" :min="2" :max="20" :step="1" easing>
+				<template #label>{{ i18n.ts.numberOfReplies }}</template>
+				<template #caption>{{ i18n.ts.numberOfRepliesDescription }}</template>
+			</MkRange>
 		</div>
 	</FormSection>
 
@@ -146,8 +158,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 			<MkRadios v-model="cornerRadius">
 				<template #label>{{ i18n.ts.cornerRadius }}</template>
-				<option :value="null">Misskey</option>
-				<option value="sharkey">Sharkey</option>
+				<option :value="null"><i class="sk-icons sk-shark ph-bold" style="top: 2px;position: relative;"></i> Sharkey</option>
+				<option value="misskey"><i class="sk-icons sk-misskey ph-bold" style="top: 2px;position: relative;"></i> Misskey</option>
 			</MkRadios>
 		</div>
 	</FormSection>
@@ -261,6 +273,7 @@ const nsfw = computed(defaultStore.makeGetterSetter('nsfw'));
 const showFixedPostForm = computed(defaultStore.makeGetterSetter('showFixedPostForm'));
 const showFixedPostFormInChannel = computed(defaultStore.makeGetterSetter('showFixedPostFormInChannel'));
 const numberOfPageCache = computed(defaultStore.makeGetterSetter('numberOfPageCache'));
+const numberOfReplies = computed(defaultStore.makeGetterSetter('numberOfReplies'));
 const instanceTicker = computed(defaultStore.makeGetterSetter('instanceTicker'));
 const enableInfiniteScroll = computed(defaultStore.makeGetterSetter('enableInfiniteScroll'));
 const useReactionPickerForContextMenu = computed(defaultStore.makeGetterSetter('useReactionPickerForContextMenu'));
@@ -273,6 +286,9 @@ const keepScreenOn = computed(defaultStore.makeGetterSetter('keepScreenOn'));
 const disableStreamingTimeline = computed(defaultStore.makeGetterSetter('disableStreamingTimeline'));
 const useGroupedNotifications = computed(defaultStore.makeGetterSetter('useGroupedNotifications'));
 const showTickerOnReplies = computed(defaultStore.makeGetterSetter('showTickerOnReplies'));
+const noteDesign = computed(defaultStore.makeGetterSetter('noteDesign'));
+const uncollapseCW = computed(defaultStore.makeGetterSetter('uncollapseCW'));
+const expandLongNote = computed(defaultStore.makeGetterSetter('expandLongNote'));
 
 watch(lang, () => {
 	miLocalStorage.setItem('lang', lang.value as string);

@@ -35,48 +35,51 @@ const faviconUrl = $computed(() => props.instance ? getProxiedImageUrlNullable(p
 const themeColor = instance.themeColor ?? '#777777';
 
 const bg = {
-	//background: `linear-gradient(90deg, ${themeColor}, ${themeColor}00)`,
-	background: `${themeColor}`,
+	background: `linear-gradient(90deg, ${themeColor}, ${themeColor}00)`,
 };
 </script>
 
 <style lang="scss" module>
+$height: 2ex;
+
 .root {
 	display: flex;
 	align-items: center;
-	height: 1.5ex;
-	border-radius: var(--radius-xl);
-	margin-top: 5px;
-	padding: 4px;
+	height: $height;
+	border-radius: var(--radius-xs) 0 0 var(--radius-xs);
 	overflow: clip;
 	color: #fff;
-	text-shadow: -1px -1px 0 var(--bg),1px -1px 0 var(--bg),-1px 1px 0 var(--bg),1px 1px 0 var(--bg)
+	text-shadow: /* .866 ≈ sin(60deg) */
+		1px 0 1px #000,
+		.866px .5px 1px #000,
+		.5px .866px 1px #000,
+		0 1px 1px #000,
+		-.5px .866px 1px #000,
+		-.866px .5px 1px #000,
+		-1px 0 1px #000,
+		-.866px -.5px 1px #000,
+		-.5px -.866px 1px #000,
+		0 -1px 1px #000,
+		.5px -.866px 1px #000,
+		.866px -.5px 1px #000;
+	mask-image: linear-gradient(90deg,
+		rgb(0,0,0),
+		rgb(0,0,0) calc(100% - 16px),
+		rgba(0,0,0,0) 100%
+	);
 }
 
 .icon {
-	height: 2ex;
+	height: $height;
 	flex-shrink: 0;
 }
 
 .name {
 	margin-left: 4px;
 	line-height: 1;
-	font-size: 0.8em;
+	font-size: 0.9em;
 	font-weight: bold;
 	white-space: nowrap;
-	overflow: hidden;
-	overflow-wrap: anywhere;
-	max-width: 300px;
-	text-overflow: ellipsis;
-
-	&::-webkit-scrollbar {
-		display: none;
-	}
-}
-
-@container (max-width: 400px) {
-	.name {
-		max-width: 50px;
-	}
+	overflow: visible;
 }
 </style>

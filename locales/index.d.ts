@@ -947,6 +947,8 @@ export interface Locale {
     "document": string;
     "numberOfPageCache": string;
     "numberOfPageCacheDescription": string;
+    "numberOfReplies": string;
+    "numberOfRepliesDescription": string;
     "logoutConfirm": string;
     "lastActiveDate": string;
     "statusbar": string;
@@ -1698,6 +1700,7 @@ export interface Locale {
         };
         "_options": {
             "gtlAvailable": string;
+            "btlAvailable": string;
             "ltlAvailable": string;
             "canPublicNote": string;
             "canImportNotes": string;

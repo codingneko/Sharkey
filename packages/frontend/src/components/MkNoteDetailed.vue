@@ -11,9 +11,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 	v-hotkey="keymap"
 	:class="$style.root"
 >
-	<div v-if="appearNote.reply && appearNote.reply.replyId && !conversationLoaded" style="padding: 16px">
-		<MkButton style="margin: 0 auto;" primary rounded @click="loadConversation">{{ i18n.ts.loadConversation }}</MkButton>
+	<div v-if="appearNote.reply && appearNote.reply.replyId">
+		<div v-if="!conversationLoaded" style="padding: 16px">
+			<MkButton style="margin: 0 auto;" primary rounded @click="loadConversation">{{ i18n.ts.loadConversation }}</MkButton>
+		</div>
+		<MkNoteSub v-for="note in conversation" :key="note.id" :class="$style.replyToMore" :note="note" :expandAllCws="props.expandAllCws"/>
 	</div>
+	<MkNoteSub v-if="appearNote.reply" :note="appearNote.reply" :class="$style.replyTo" :expandAllCws="props.expandAllCws"/>
 	<div v-if="isRenote" :class="$style.renote">
 		<MkAvatar :class="$style.renoteAvatar" :user="note.user" link preview/>
 		<i class="ph-rocket-launch ph-bold ph-lg" style="margin-right: 4px;"></i>
@@ -39,29 +43,15 @@ SPDX-License-Identifier: AGPL-3.0-only
 			<span v-if="note.localOnly" style="margin-left: 0.5em;" :title="i18n.ts._visibility['disableFederation']"><i class="ph-rocket ph-bold ph-lg"></i></span>
 		</div>
 	</div>
-	<template v-if="appearNote.reply && appearNote.reply.replyId">
-		<MkNoteSub v-for="note in conversation" :key="note.id" :class="$style.replyToMore" :note="note" :expandAllCws="props.expandAllCws"/>
-	</template>
-	<MkNoteSub v-if="appearNote.reply" :note="appearNote.reply" :class="$style.replyTo" :expandAllCws="props.expandAllCws"/>
 	<article :class="$style.note" @contextmenu.stop="onContextmenu">
 		<header :class="$style.noteHeader">
 			<MkAvatar :class="$style.noteHeaderAvatar" :user="appearNote.user" indicator link preview/>
-			<div style="display: flex; align-items: center; white-space: nowrap; overflow: hidden;">
-				<div :class="$style.noteHeaderBody">
-					<div>
-						<MkA v-user-preview="appearNote.user.id" :class="$style.noteHeaderName" :to="userPage(appearNote.user)">
-							<MkUserName :nowrap="false" :user="appearNote.user"/>
-						</MkA>
-						<span v-if="appearNote.user.isBot" :class="$style.isBot">bot</span>
-						<span v-if="appearNote.user.badgeRoles" :class="$style.badgeRoles">
-							<img v-for="role in appearNote.user.badgeRoles" :key="role.id" v-tooltip="role.name" :class="$style.badgeRole" :src="role.iconUrl"/>
-						</span>
-					</div>
-					<div :class="$style.noteHeaderUsername"><MkAcct :user="appearNote.user"/></div>
-				</div>
-			</div>
-			<div style="display: flex; align-items: flex-end; margin-left: auto;">
-				<div :class="$style.noteHeaderBody">
+			<div :class="$style.noteHeaderBody">
+				<div>
+					<MkA v-user-preview="appearNote.user.id" :class="$style.noteHeaderName" :to="userPage(appearNote.user)">
+						<MkUserName :nowrap="false" :user="appearNote.user"/>
+					</MkA>
+					<span v-if="appearNote.user.isBot" :class="$style.isBot">bot</span>
 					<div :class="$style.noteHeaderInfo">
 						<span v-if="appearNote.visibility !== 'public'" style="margin-left: 0.5em;" :title="i18n.ts._visibility[appearNote.visibility]">
 							<i v-if="appearNote.visibility === 'home'" class="ph-house ph-bold ph-lg"></i>
@@ -71,8 +61,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<span v-if="appearNote.updatedAt" ref="menuVersionsButton" style="margin-left: 0.5em;" title="Edited" @mousedown="menuVersions()"><i class="ph-pencil ph-bold ph-lg"></i></span>
 						<span v-if="appearNote.localOnly" style="margin-left: 0.5em;" :title="i18n.ts._visibility['disableFederation']"><i class="ph-rocket ph-bold ph-lg"></i></span>
 					</div>
-					<MkInstanceTicker v-if="showTicker" :instance="appearNote.user.instance"/>
 				</div>
+				<div :class="$style.noteHeaderUsername"><MkAcct :user="appearNote.user"/></div>
+				<MkInstanceTicker v-if="showTicker" :instance="appearNote.user.instance"/>
 			</div>
 		</header>
 		<div :class="$style.noteContent">
@@ -82,6 +73,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</p>
 			<div v-show="appearNote.cw == null || showContent">
 				<span v-if="appearNote.isHidden" style="opacity: 0.5">({{ i18n.ts.private }})</span>
+				<MkA v-if="appearNote.replyId" :class="$style.noteReplyTarget" :to="`/notes/${appearNote.replyId}`"><i class="ph-arrow-bend-left-up ph-bold ph-lg"></i></MkA>
 				<Mfm
 					v-if="appearNote.text"
 					:parsedNodes="parsed"
@@ -132,7 +124,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				class="_button"
 				:class="$style.noteFooterButton"
 				:style="renoted ? 'color: var(--accent) !important;' : ''"
-				@mousedown="renoted ? undoRenote() : renote()"
+				@mousedown="renoted ? undoRenote() : boostVisibility()"
 			>
 				<i class="ph-rocket-launch ph-bold ph-lg"></i>
 				<p v-if="appearNote.renoteCount > 0" :class="$style.noteFooterButtonCount">{{ appearNote.renoteCount }}</p>
@@ -314,7 +306,7 @@ const renoteUrl = appearNote.renote ? appearNote.renote.url : null;
 const renoteUri = appearNote.renote ? appearNote.renote.uri : null;
 
 const isMyRenote = $i && ($i.id === note.userId);
-const showContent = ref(false);
+const showContent = ref(defaultStore.state.uncollapseCW);
 const isDeleted = ref(false);
 const renoted = ref(false);
 const muted = ref($i ? checkWordMute(appearNote, $i, $i.mutedWords) : false);
@@ -435,7 +427,43 @@ function smallerVisibility(a: Visibility | string, b: Visibility | string): Visi
 	return 'public';
 }
 
-function renote() {
+function boostVisibility() {
+	os.popupMenu([
+		{
+			type: 'button',
+			icon: 'ph-globe-hemisphere-west ph-bold ph-lg',
+			text: i18n.ts._visibility['public'],
+			action: () => {
+				renote('public');
+			},
+		},
+		{
+			type: 'button',
+			icon: 'ph-house ph-bold ph-lg',
+			text: i18n.ts._visibility['home'],
+			action: () => {
+				renote('home');
+			},
+		},
+		{
+			type: 'button',
+			icon: 'ph-lock ph-bold ph-lg',
+			text: i18n.ts._visibility['followers'],
+			action: () => {
+				renote('followers');
+			},
+		},
+		{
+			type: 'button',
+			icon: 'ph-planet ph-bold ph-lg',
+			text: i18n.ts._timelines.local,
+			action: () => {
+				renote('local');
+			},
+		}], renoteButton.value);
+}
+
+function renote(visibility: Visibility | 'local') {
 	pleaseLogin();
 	showMovedDialog();
 
@@ -465,17 +493,16 @@ function renote() {
 		}
 
 		const configuredVisibility = defaultStore.state.rememberNoteVisibility ? defaultStore.state.visibility : defaultStore.state.defaultNoteVisibility;
-		const localOnly = defaultStore.state.rememberNoteVisibility ? defaultStore.state.localOnly : defaultStore.state.defaultNoteLocalOnly;
+		const localOnlySetting = defaultStore.state.rememberNoteVisibility ? defaultStore.state.localOnly : defaultStore.state.defaultNoteLocalOnly;
 
-		let visibility = appearNote.visibility;
-		visibility = smallerVisibility(visibility, configuredVisibility);
+		let noteVisibility = visibility === 'local' || visibility === 'specified' ? smallerVisibility(appearNote.visibility, configuredVisibility) : smallerVisibility(visibility, configuredVisibility);
 		if (appearNote.channel?.isSensitive) {
-			visibility = smallerVisibility(visibility, 'home');
+			noteVisibility = smallerVisibility(visibility === 'local' || visibility === 'specified' ? appearNote.visibility : visibility, 'home');
 		}
 
 		os.api('notes/create', {
-			localOnly,
-			visibility,
+			localOnly: visibility === 'local' ? true : localOnlySetting,
+			visibility: noteVisibility,
 			renoteId: appearNote.id,
 		}).then(() => {
 			os.toast(i18n.ts.renoted);
@@ -859,19 +886,12 @@ function animatedMFM() {
 
 .noteHeaderInfo {
 	float: right;
-	text-align: right;
 }
 
 .noteHeaderUsername {
 	margin-bottom: 2px;
 	line-height: 1.3;
 	word-wrap: anywhere;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-
-	&::-webkit-scrollbar {
-		display: none;
-	}
 }
 
 .playMFMButton {
@@ -1052,31 +1072,9 @@ function animatedMFM() {
 	}
 }
 
-.avatar {
-	flex-shrink: 0 !important;
-	display: block !important;
-	margin: 0 10px 0 0 !important;
-	width: 40px !important;
-	height: 40px !important;
-	border-radius: var(--radius-sm) !important;
-}
-
 .muted {
 	padding: 8px;
 	text-align: center;
 	opacity: 0.7;
-}
-
-.badgeRoles {
-	margin: 0 .5em 0 0;
-}
-
-.badgeRole {
-	height: 1.3em;
-	vertical-align: -20%;
-
-	& + .badgeRole {
-		margin-left: 0.2em;
-	}
 }
 </style>

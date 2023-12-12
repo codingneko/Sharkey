@@ -5,12 +5,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <template>
 <div v-if="!muted" ref="el" :class="[$style.root, { [$style.children]: depth > 1 }]">
-	<div v-if="!hideLine" :class="$style.line"></div>
 	<div :class="$style.main">
 		<div v-if="note.channel" :class="$style.colorBar" :style="{ background: note.channel.color }"></div>
 		<MkAvatar :class="$style.avatar" :user="note.user" link preview/>
 		<div :class="$style.body">
-			<MkNoteHeader :class="$style.header" :note="note" :classic="true" :mini="true"/>
+			<MkNoteHeader :class="$style.header" :note="note" :mini="true"/>
 			<div :class="$style.content">
 				<p v-if="note.cw != null" :class="$style.cw">
 					<Mfm v-if="note.cw != ''" style="margin-right: 8px;" :text="note.cw" :author="note.user" :nyaize="'respect'"/>
@@ -32,7 +31,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 					class="_button"
 					:class="$style.noteFooterButton"
 					:style="renoted ? 'color: var(--accent) !important;' : ''"
-					@mousedown="renoted ? undoRenote() : renote()"
+					@mousedown="renoted ? undoRenote() : boostVisibility()"
 				>
 					<i class="ph-rocket-launch ph-bold ph-lg"></i>
 					<p v-if="note.renoteCount > 0" :class="$style.noteFooterButtonCount">{{ note.renoteCount }}</p>
@@ -65,7 +64,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</footer>
 		</div>
 	</div>
-	<template v-if="depth < 5">
+	<template v-if="depth < numberOfReplies">
 		<MkNoteSub v-for="reply in replies" :key="reply.id" :note="reply" :class="$style.reply" :detail="true" :depth="depth + 1" :expandAllCws="props.expandAllCws"/>
 	</template>
 	<div v-else :class="$style.more">
@@ -107,7 +106,6 @@ import { getNoteMenu } from '@/scripts/get-note-menu.js';
 import { useNoteCapture } from '@/scripts/use-note-capture.js';
 
 const canRenote = computed(() => ['public', 'home'].includes(props.note.visibility) || props.note.userId === $i.id);
-const hideLine = computed(() => { return props.detail ? true : false; });
 
 const props = withDefaults(defineProps<{
 	note: Misskey.entities.Note;
@@ -126,6 +124,7 @@ const translation = ref<any>(null);
 const translating = ref(false);
 const isDeleted = ref(false);
 const renoted = ref(false);
+const numberOfReplies = ref(defaultStore.state.numberOfReplies);
 const reactButton = shallowRef<HTMLElement>();
 const renoteButton = shallowRef<HTMLElement>();
 const quoteButton = shallowRef<HTMLElement>();
@@ -246,7 +245,7 @@ function undoRenote() : void {
 	}
 }
 
-let showContent = $ref(false);
+let showContent = $ref(defaultStore.state.uncollapseCW);
 
 watch(() => props.expandAllCws, (expandAllCws) => {
 	if (expandAllCws !== showContent) showContent = expandAllCws;
@@ -254,7 +253,43 @@ watch(() => props.expandAllCws, (expandAllCws) => {
 
 let replies: Misskey.entities.Note[] = $ref([]);
 
-function renote() {
+function boostVisibility() {
+	os.popupMenu([
+		{
+			type: 'button',
+			icon: 'ph-globe-hemisphere-west ph-bold ph-lg',
+			text: i18n.ts._visibility['public'],
+			action: () => {
+				renote('public');
+			},
+		},
+		{
+			type: 'button',
+			icon: 'ph-house ph-bold ph-lg',
+			text: i18n.ts._visibility['home'],
+			action: () => {
+				renote('home');
+			},
+		},
+		{
+			type: 'button',
+			icon: 'ph-lock ph-bold ph-lg',
+			text: i18n.ts._visibility['followers'],
+			action: () => {
+				renote('followers');
+			},
+		},
+		{
+			type: 'button',
+			icon: 'ph-planet ph-bold ph-lg',
+			text: i18n.ts._timelines.local,
+			action: () => {
+				renote('local');
+			},
+		}], renoteButton.value);
+}
+
+function renote(visibility: 'public' | 'home' | 'followers' | 'specified' | 'local') {
 	pleaseLogin();
 	showMovedDialog();
 
@@ -285,6 +320,8 @@ function renote() {
 
 		os.api('notes/create', {
 			renoteId: props.note.id,
+			localOnly: visibility === 'local' ? true : false,
+			visibility: visibility === 'local' || visibility === 'specified' ? props.note.visibility : visibility,
 		}).then(() => {
 			os.toast(i18n.ts.renoted);
 			renoted.value = true;
@@ -354,7 +391,8 @@ function menu(viaKeyboard = false): void {
 if (props.detail) {
 	os.api('notes/children', {
 		noteId: props.note.id,
-		limit: 5,
+		limit: numberOfReplies.value,
+		showQuotes: false,
 	}).then(res => {
 		replies = res;
 	});
@@ -363,7 +401,7 @@ if (props.detail) {
 
 <style lang="scss" module>
 .root {
-	padding: 28px 32px;
+	padding: 16px 32px;
 	font-size: 0.9em;
 	position: relative;
 
@@ -373,20 +411,12 @@ if (props.detail) {
 	}
 }
 
-.line {
-	position: absolute;
-	height: 100%;
-	left: 60px;
-	// using solid instead of dotted, stylelistic choice
-	border-left: 2.5px solid rgb(174, 174, 174);
-}
-
 .footer {
-	position: relative;
-	z-index: 1;
-	margin-top: 0.4em;
-	width: max-content;
-	min-width: max-content;
+		position: relative;
+		z-index: 1;
+		margin-top: 0.4em;
+		width: max-content;
+		min-width: max-content;
 }
 
 .main {
@@ -406,9 +436,9 @@ if (props.detail) {
 .avatar {
 	flex-shrink: 0;
 	display: block;
-	margin: 0 14px 0 0;
-	width: 58px;
-	height: 58px;
+	margin: 0 8px 0 0;
+	width: 38px;
+	height: 38px;
 	border-radius: var(--radius-sm);
 }
 
@@ -419,11 +449,6 @@ if (props.detail) {
 
 .content {
 	overflow: hidden;
-}
-
-.text {
-	margin: 0;
-	padding: 0;
 }
 
 .header {
@@ -442,36 +467,6 @@ if (props.detail) {
 
 	&:hover {
 		color: var(--fgHighlighted);
-	}
-}
-
-.reply, .more {
-	border-left: solid 0.5px var(--divider);
-	margin-top: 10px;
-}
-
-.more {
-	padding: 10px 0 0 16px;
-}
-
-@container (max-width: 580px) {
-	.root {
-		padding: 28px 26px 0;
-	}
-
-	.line {
-		left: 50.5px;
-	}
-
-	.avatar {
-		width: 50px;
-		height: 50px;
-	}
-}
-
-@container (max-width: 500px) {
-	.root {
-		padding: 23px 25px;
 	}
 }
 
@@ -514,24 +509,13 @@ if (props.detail) {
 	padding: 10px 0 0 16px;
 }
 
-@container (max-width: 480px) {
+@container (max-width: 450px) {
 	.root {
-		padding: 22px 24px;
+		padding: 14px 16px;
 
 		&.children {
 			padding: 10px 0 0 8px;
 		}
-	}
-}
-
-@container (max-width: 450px) {
-	.line {
-		left: 46px;
-	}
-
-	.avatar {
-		width: 46px;
-		height: 46px;
 	}
 }
 
