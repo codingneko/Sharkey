@@ -1,33 +1,13 @@
 version: "3"
 
-services:
-  web:
-#   replace image below with git.joinsharkey.org/sharkey/sharkey:stable on next release
-#   image: ghcr.io/transfem-org/sharkey:stable
-    build: .
-    restart: always
-    links:
-      - db
-      - redis
-#     - meilisearch
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    ports:
-      - "3000:3000"
-    networks:
-      - shonk
-    volumes:
-      - ./files:/sharkey/files
-      - ./.config:/sharkey/.config:ro
+# このconfigは、 dockerでMisskey本体を起動せず、 redisとpostgresql などだけを起動します
 
+services:
   redis:
     restart: always
     image: redis:7-alpine
-    networks:
-      - shonk
+    ports:
+      - "6379:6379"
     volumes:
       - ./redis:/data
     healthcheck:
@@ -38,8 +18,8 @@ services:
   db:
     restart: always
     image: postgres:15-alpine
-    networks:
-      - shonk
+    ports:
+      - "5432:5432"
     env_file:
       - .config/docker.env
     volumes:
@@ -57,11 +37,6 @@ services:
 #      - MEILI_ENV=production
 #    env_file:
 #      - .config/meilisearch.env
-#    networks:
-#      - shonk
 #    volumes:
 #      - ./meili_data:/meili_data
 
-
-networks:
-  shonk:
