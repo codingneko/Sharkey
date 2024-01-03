@@ -441,39 +441,43 @@ function smallerVisibility(a: Visibility | string, b: Visibility | string): Visi
 }
 
 function boostVisibility() {
-	os.popupMenu([
-		{
-			type: 'button',
-			icon: 'ph-globe-hemisphere-west ph-bold ph-lg',
-			text: i18n.ts._visibility['public'],
-			action: () => {
-				renote('public');
+	if (!defaultStore.state.showVisibilitySelectorOnBoost) {
+		renote(defaultStore.state.visibilityOnBoost);
+	} else {
+		os.popupMenu([
+			{
+				type: 'button',
+				icon: 'ph-globe-hemisphere-west ph-bold ph-lg',
+				text: i18n.ts._visibility['public'],
+				action: () => {
+					renote('public');
+				},
 			},
-		},
-		{
-			type: 'button',
-			icon: 'ph-house ph-bold ph-lg',
-			text: i18n.ts._visibility['home'],
-			action: () => {
-				renote('home');
+			{
+				type: 'button',
+				icon: 'ph-house ph-bold ph-lg',
+				text: i18n.ts._visibility['home'],
+				action: () => {
+					renote('home');
+				},
 			},
-		},
-		{
-			type: 'button',
-			icon: 'ph-lock ph-bold ph-lg',
-			text: i18n.ts._visibility['followers'],
-			action: () => {
-				renote('followers');
+			{
+				type: 'button',
+				icon: 'ph-lock ph-bold ph-lg',
+				text: i18n.ts._visibility['followers'],
+				action: () => {
+					renote('followers');
+				},
 			},
-		},
-		{
-			type: 'button',
-			icon: 'ph-planet ph-bold ph-lg',
-			text: i18n.ts._timelines.local,
-			action: () => {
-				renote('local');
-			},
-		}], renoteButton.value);
+			{
+				type: 'button',
+				icon: 'ph-planet ph-bold ph-lg',
+				text: i18n.ts._timelines.local,
+				action: () => {
+					renote('local');
+				},
+			}], renoteButton.value);
+	}
 }
 
 function renote(visibility: Visibility | 'local') {
@@ -624,6 +628,7 @@ function react(viaKeyboard = false): void {
 function like(): void {
 	pleaseLogin();
 	showMovedDialog();
+	sound.play('reaction');
 	os.api('notes/like', {
 		noteId: appearNote.value.id,
 		override: defaultLike.value,
@@ -871,8 +876,8 @@ function animatedMFM() {
 .noteHeaderAvatar {
 	display: block;
 	flex-shrink: 0;
-	width: 58px;
-	height: 58px;
+	width: var(--avatar);
+	height: var(--avatar);
 }
 
 .noteHeaderBody {

@@ -91,6 +91,7 @@ import MkSubNoteContent from '@/components/MkSubNoteContent.vue';
 import MkCwButton from '@/components/MkCwButton.vue';
 import { notePage } from '@/filters/note.js';
 import * as os from '@/os.js';
+import * as sound from '@/scripts/sound.js';
 import { i18n } from '@/i18n.js';
 import { $i } from '@/account.js';
 import { userPage } from '@/filters/user.js';
@@ -193,6 +194,7 @@ function reply(viaKeyboard = false): void {
 function react(viaKeyboard = false): void {
 	pleaseLogin();
 	showMovedDialog();
+	sound.play('reaction');
 	if (props.note.reactionAcceptance === 'likeOnly') {
 		os.api('notes/like', {
 			noteId: props.note.id,
@@ -224,6 +226,7 @@ function react(viaKeyboard = false): void {
 function like(): void {
 	pleaseLogin();
 	showMovedDialog();
+	sound.play('reaction');
 	os.api('notes/like', {
 		noteId: props.note.id,
 		override: defaultLike.value,
@@ -269,39 +272,43 @@ watch(() => props.expandAllCws, (expandAllCws) => {
 });
 
 function boostVisibility() {
-	os.popupMenu([
-		{
-			type: 'button',
-			icon: 'ph-globe-hemisphere-west ph-bold ph-lg',
-			text: i18n.ts._visibility['public'],
-			action: () => {
-				renote('public');
+	if (!defaultStore.state.showVisibilitySelectorOnBoost) {
+		renote(defaultStore.state.visibilityOnBoost);
+	} else {
+		os.popupMenu([
+			{
+				type: 'button',
+				icon: 'ph-globe-hemisphere-west ph-bold ph-lg',
+				text: i18n.ts._visibility['public'],
+				action: () => {
+					renote('public');
+				},
 			},
-		},
-		{
-			type: 'button',
-			icon: 'ph-house ph-bold ph-lg',
-			text: i18n.ts._visibility['home'],
-			action: () => {
-				renote('home');
+			{
+				type: 'button',
+				icon: 'ph-house ph-bold ph-lg',
+				text: i18n.ts._visibility['home'],
+				action: () => {
+					renote('home');
+				},
 			},
-		},
-		{
-			type: 'button',
-			icon: 'ph-lock ph-bold ph-lg',
-			text: i18n.ts._visibility['followers'],
-			action: () => {
-				renote('followers');
+			{
+				type: 'button',
+				icon: 'ph-lock ph-bold ph-lg',
+				text: i18n.ts._visibility['followers'],
+				action: () => {
+					renote('followers');
+				},
 			},
-		},
-		{
-			type: 'button',
-			icon: 'ph-planet ph-bold ph-lg',
-			text: i18n.ts._timelines.local,
-			action: () => {
-				renote('local');
-			},
-		}], renoteButton.value);
+			{
+				type: 'button',
+				icon: 'ph-planet ph-bold ph-lg',
+				text: i18n.ts._timelines.local,
+				action: () => {
+					renote('local');
+				},
+			}], renoteButton.value);
+	}
 }
 
 function renote(visibility: 'public' | 'home' | 'followers' | 'specified' | 'local') {
