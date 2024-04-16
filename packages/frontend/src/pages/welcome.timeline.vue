@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: syuilo and other misskey contributors
+SPDX-FileCopyrightText: syuilo and misskey-project
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 
@@ -40,7 +40,7 @@ const isScrolling = ref(false);
 const scrollEl = shallowRef<HTMLElement>();
 
 misskeyApiGet('notes/featured').then(_notes => {
-	notes.value = _notes;
+	notes.value = _notes.filter(n => n.cw == null);
 });
 
 onUpdated(() => {

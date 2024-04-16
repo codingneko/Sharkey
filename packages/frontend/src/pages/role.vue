@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: syuilo and other misskey contributors
+SPDX-FileCopyrightText: syuilo and misskey-project
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 
@@ -89,14 +89,14 @@ const headerTabs = computed(() => [{
 	title: i18n.ts.users,
 }, {
 	key: 'timeline',
-	icon: 'ph-pencil ph-bold ph-lg',
+	icon: 'ph-pencil-simple ph-bold ph-lg',
 	title: i18n.ts.timeline,
 }]);
 
-definePageMetadata(computed(() => ({
-	title: role.value?.name,
+definePageMetadata(() => ({
+	title: role.value ? role.value.name : i18n.ts.role,
 	icon: 'ph-seal-check ph-bold ph-lg',
-})));
+}));
 </script>
 
 <style lang="scss" module>

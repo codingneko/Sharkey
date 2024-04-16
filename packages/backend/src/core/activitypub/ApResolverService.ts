@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: syuilo and other misskey contributors
+ * SPDX-FileCopyrightText: syuilo and misskey-project
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
@@ -105,7 +105,7 @@ export class Resolver {
 
 		const object = (this.user
 			? await this.apRequestService.signedGet(value, this.user) as IObject
-			: await this.httpRequestService.getJson(value, 'application/activity+json, application/ld+json')) as IObject;
+			: await this.httpRequestService.getActivityJson(value)) as IObject;
 
 		if (
 			Array.isArray(object['@context']) ?
@@ -113,6 +113,14 @@ export class Resolver {
 				object['@context'] !== 'https://www.w3.org/ns/activitystreams'
 		) {
 			throw new Error('invalid response');
+		}
+
+		// HttpRequestService / ApRequestService have already checked that
+		// `object.id` or `object.url` matches the URL used to fetch the
+		// object after redirects; here we double-check that no redirects
+		// bounced between hosts
+		if (object.id && (this.utilityService.punyHost(object.id) !== this.utilityService.punyHost(value))) {
+			throw new Error(`invalid AP object ${value}: id ${object.id} has different host`);
 		}
 
 		return object;

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: syuilo and other misskey contributors
+ * SPDX-FileCopyrightText: syuilo and misskey-project
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
@@ -192,7 +192,7 @@ export function getUserMenu(user: Misskey.entities.UserDetailed, router: IRouter
 			os.post({ specified: user, initialText: `${canonical} ` });
 		},
 	}, { type: 'divider' }, {
-		icon: 'ph-pencil ph-bold ph-lg',
+		icon: 'ph-pencil-simple ph-bold ph-lg',
 		text: i18n.ts.editMemo,
 		action: () => {
 			editMemo();
@@ -364,7 +364,7 @@ export function getUserMenu(user: Misskey.entities.UserDetailed, router: IRouter
 
 	if ($i && meId === user.id) {
 		menu = menu.concat([{ type: 'divider' }, {
-			icon: 'ph-pencil ph-bold ph-lg',
+			icon: 'ph-pencil-simple ph-bold ph-lg',
 			text: i18n.ts.editProfile,
 			action: () => {
 				router.push('/settings/profile');

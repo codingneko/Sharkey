@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: syuilo and other misskey contributors
+SPDX-FileCopyrightText: syuilo and misskey-project
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 
@@ -10,7 +10,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<MkSpacer :contentMax="700">
 			<div class="_gaps">
 				<div class="_buttons">
-					<MkButton primary rounded @click="edit"><i class="ph-pencil ph-bold ph-lg"></i> {{ i18n.ts.edit }}</MkButton>
+					<MkButton primary rounded @click="edit"><i class="ph-pencil-simple ph-bold ph-lg"></i> {{ i18n.ts.edit }}</MkButton>
 					<MkButton danger rounded @click="del"><i class="ph-trash ph-bold ph-lg"></i> {{ i18n.ts.delete }}</MkButton>
 				</div>
 				<MkFolder>
@@ -170,10 +170,10 @@ const headerActions = computed(() => []);
 
 const headerTabs = computed(() => []);
 
-definePageMetadata(computed(() => ({
-	title: i18n.ts.role + ': ' + role.name,
+definePageMetadata(() => ({
+	title: `${i18n.ts.role}: ${role.name}`,
 	icon: 'ph-seal-check ph-bold ph-lg',
-})));
+}));
 </script>
 
 <style lang="scss" module>

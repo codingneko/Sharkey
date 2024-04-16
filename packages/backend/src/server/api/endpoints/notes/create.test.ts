@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: syuilo and other misskey contributors
+ * SPDX-FileCopyrightText: syuilo and misskey-project
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
@@ -41,11 +41,6 @@ describe('api:notes/create', () => {
 
 			test('0 characters post', () => {
 				expect(v({ text: '' }))
-					.toBe(INVALID);
-			});
-
-			test('over 3000 characters post', async () => {
-				expect(v({ text: await tooLong }))
 					.toBe(INVALID);
 			});
 

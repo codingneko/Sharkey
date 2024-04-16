@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: syuilo and other misskey contributors
+SPDX-FileCopyrightText: syuilo and misskey-project
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 
@@ -116,13 +116,13 @@ const headerTabs = computed(() => [{
 }, {
 	key: 'my',
 	title: i18n.ts._gallery.my,
-	icon: 'ph-pencil-line ph-bold ph-lg',
+	icon: 'ph-pencil-simple-line ph-bold ph-lg',
 }]);
 
-definePageMetadata({
+definePageMetadata(() => ({
 	title: i18n.ts.gallery,
 	icon: 'ph-images-square ph-bold ph-lg',
-});
+}));
 </script>
 
 <style lang="scss" module>

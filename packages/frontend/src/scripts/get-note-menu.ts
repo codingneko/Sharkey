@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: syuilo and other misskey contributors
+ * SPDX-FileCopyrightText: syuilo and misskey-project
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
@@ -102,10 +102,13 @@ export function getAbuseNoteMenu(note: Misskey.entities.Note, text: string): Men
 		icon: 'ph-warning-circle ph-bold ph-lg',
 		text,
 		action: (): void => {
-			const u = note.url ?? note.uri ?? `${url}/notes/${note.id}`;
+			const localUrl = `${url}/notes/${note.id}`;
+			let noteInfo = '';
+			if (note.url ?? note.uri != null) noteInfo = `Note: ${note.url ?? note.uri}\n`;
+			noteInfo += `Local Note: ${localUrl}\n`;
 			os.popup(defineAsyncComponent(() => import('@/components/MkAbuseReportWindow.vue')), {
 				user: note.user,
-				initialComment: `Note: ${u}\n-----\n`,
+				initialComment: `${noteInfo}-----\n`,
 			}, {}, 'closed');
 		},
 	};
@@ -298,7 +301,7 @@ export function getNoteMenu(props: {
 				text: i18n.ts.copyContent,
 				action: copyContent,
 			}, getCopyNoteLinkMenu(appearNote, i18n.ts.copyLink)
-			, (appearNote.url || appearNote.uri) ? 
+			, (appearNote.url || appearNote.uri) ?
 				getCopyNoteOriginLinkMenu(appearNote, 'Copy link (Origin)')
 			: undefined,
 			(appearNote.url || appearNote.uri) ? {
@@ -418,16 +421,16 @@ export function getNoteMenu(props: {
 			...(appearNote.userId === $i.id || $i.isModerator || $i.isAdmin ? [
 				{ type: 'divider' },
 				appearNote.userId === $i.id ? {
-					icon: 'ph-pencil ph-bold ph-lg',
+					icon: 'ph-pencil-simple ph-bold ph-lg',
 					text: i18n.ts.edit,
 					action: edit,
 				} : undefined,
 				{
-					icon: 'ph-pencil-line ph-bold ph-lg',
+					icon: 'ph-pencil-simple-line ph-bold ph-lg',
 					text: i18n.ts.deleteAndEdit,
 					danger: true,
 					action: delEdit,
-				}, 
+				},
 				{
 					icon: 'ph-trash ph-bold ph-lg',
 					text: i18n.ts.delete,
@@ -447,7 +450,7 @@ export function getNoteMenu(props: {
 			text: i18n.ts.copyContent,
 			action: copyContent,
 		}, getCopyNoteLinkMenu(appearNote, i18n.ts.copyLink)
-		, (appearNote.url || appearNote.uri) ? 
+		, (appearNote.url || appearNote.uri) ?
 			getCopyNoteOriginLinkMenu(appearNote, 'Copy link (Origin)')
 		: undefined,
 		(appearNote.url || appearNote.uri) ? {

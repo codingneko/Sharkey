@@ -1,6 +1,5 @@
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
-import * as vm from 'node:vm';
 import * as crypto from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { ZipReader } from 'slacc';
@@ -419,6 +418,10 @@ export class ImportNotesProcessorService {
 				const name = file.url.substring(slashdex + 1);
 				const exists = await this.driveFilesRepository.findOneBy({ name: name, userId: user.id });
 				if (exists) {
+					if (file.name) {
+						this.driveService.updateFile(exists, { comment: file.name }, user);
+					}
+
 					files.push(exists);
 				}
 			}

@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: syuilo and other misskey contributors
+SPDX-FileCopyrightText: syuilo and misskey-project
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 
@@ -16,12 +16,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 						$i.notificationRecieveConfig[type]?.type === 'following' ? i18n.ts.following :
 						$i.notificationRecieveConfig[type]?.type === 'follower' ? i18n.ts.followers :
 						$i.notificationRecieveConfig[type]?.type === 'mutualFollow' ? i18n.ts.mutualFollow :
+						$i.notificationRecieveConfig[type]?.type === 'followingOrFollower' ? i18n.ts.followingOrFollower :
 						$i.notificationRecieveConfig[type]?.type === 'list' ? i18n.ts.userList :
 						i18n.ts.all
 					}}
 				</template>
 
-				<XNotificationConfig :userLists="userLists" :value="$i.notificationRecieveConfig[type] ?? { type: 'all' }" @update="(res) => updateReceiveConfig(type, res)"/>
+				<XNotificationConfig :userLists="userLists" :value="$i.notificationRecieveConfig[type] ?? { type: 'all' }" :hasSender="!(notificationTypesWithoutSender.includes(type))" @update="(res) => updateReceiveConfig(type, res)"/>
 			</MkFolder>
 		</div>
 	</FormSection>
@@ -34,6 +35,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 	<FormSection>
 		<div class="_gaps_m">
 			<FormLink @click="testNotification">{{ i18n.ts._notification.sendTestNotification }}</FormLink>
+			<FormLink @click="flushNotification">{{ i18n.ts._notification.flushNotification }}</FormLink>
 		</div>
 	</FormSection>
 	<FormSection>
@@ -71,7 +73,8 @@ import { notificationTypes } from '@/const.js';
 
 const $i = signinRequired();
 
-const nonConfigurableNotificationTypes = ['note', 'roleAssigned', 'followRequestAccepted', 'achievementEarned'];
+const nonConfigurableNotificationTypes = ['note', 'roleAssigned', 'followRequestAccepted'];
+const notificationTypesWithoutSender = ['achievementEarned'];
 
 const allowButton = shallowRef<InstanceType<typeof MkPushNotificationAllowButton>>();
 const pushRegistrationInServer = computed(() => allowButton.value?.pushRegistrationInServer);
@@ -113,12 +116,23 @@ function testNotification(): void {
 	misskeyApi('notifications/test-notification');
 }
 
+async function flushNotification() {
+	const { canceled } = await os.confirm({
+		type: 'warning',
+		text: i18n.ts.resetAreYouSure,
+	});
+
+	if (canceled) return;
+
+	os.apiWithDialog('notifications/flush');
+}
+
 const headerActions = computed(() => []);
 
 const headerTabs = computed(() => []);
 
-definePageMetadata({
+definePageMetadata(() => ({
 	title: i18n.ts.notifications,
 	icon: 'ph-bell ph-bold ph-lg',
-});
+}));
 </script>

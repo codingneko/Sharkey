@@ -72,3 +72,6 @@ tsdoc-metadata.json
 
 # VSCode addon
 .favorites.json
+
+#Backup Script
+backup_cron.sh

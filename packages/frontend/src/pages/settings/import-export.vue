@@ -1,12 +1,12 @@
 <!--
-SPDX-FileCopyrightText: syuilo and other misskey contributors
+SPDX-FileCopyrightText: syuilo and misskey-project
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
 <div class="_gaps_m">
 	<FormSection first>
-		<template #label><i class="ph-pencil ph-bold ph-lg"></i> {{ i18n.ts._exportOrImport.allNotes }}</template>
+		<template #label><i class="ph-pencil-simple ph-bold ph-lg"></i> {{ i18n.ts._exportOrImport.allNotes }}</template>
 		<div class="_gaps_s">
 			<MkFolder>
 				<template #label>{{ i18n.ts.export }}</template>
@@ -250,10 +250,10 @@ const headerActions = computed(() => []);
 
 const headerTabs = computed(() => []);
 
-definePageMetadata({
+definePageMetadata(() => ({
 	title: i18n.ts.importAndExport,
 	icon: 'ph-package ph-bold ph-lg',
-});
+}));
 </script>
 
 <style module>

@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: syuilo and other misskey contributors
+SPDX-FileCopyrightText: syuilo and misskey-project
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 
@@ -89,7 +89,7 @@ async function unfavorite() {
 }
 
 const headerActions = computed(() => clip.value && isOwned.value ? [{
-	icon: 'ph-pencil ph-bold ph-lg',
+	icon: 'ph-pencil-simple ph-bold ph-lg',
 	text: i18n.ts.edit,
 	handler: async (): Promise<void> => {
 		const { canceled, result } = await os.form(clip.value.name, {
@@ -157,10 +157,10 @@ const headerActions = computed(() => clip.value && isOwned.value ? [{
 	},
 }] : null);
 
-definePageMetadata(computed(() => clip.value ? {
-	title: clip.value.name,
+definePageMetadata(() => ({
+	title: clip.value ? clip.value.name : i18n.ts.clip,
 	icon: 'ph-paperclip ph-bold ph-lg',
-} : null));
+}));
 </script>
 
 <style lang="scss" module>

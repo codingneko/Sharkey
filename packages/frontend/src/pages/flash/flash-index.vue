@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: syuilo and other misskey contributors
+SPDX-FileCopyrightText: syuilo and misskey-project
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 
@@ -83,15 +83,15 @@ const headerTabs = computed(() => [{
 }, {
 	key: 'my',
 	title: i18n.ts._play.my,
-	icon: 'ph-pencil-line ph-bold ph-lg',
+	icon: 'ph-pencil-simple-line ph-bold ph-lg',
 }, {
 	key: 'liked',
 	title: i18n.ts._play.liked,
 	icon: 'ph-heart ph-bold ph-lg',
 }]);
 
-definePageMetadata(computed(() => ({
+definePageMetadata(() => ({
 	title: 'Play',
 	icon: 'ph-play ph-bold ph-lg',
-})));
+}));
 </script>

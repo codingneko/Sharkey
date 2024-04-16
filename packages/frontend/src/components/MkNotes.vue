@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: syuilo and other misskey contributors
+SPDX-FileCopyrightText: syuilo and misskey-project
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 
@@ -54,8 +54,6 @@ import MkPagination, { Paging } from '@/components/MkPagination.vue';
 import { i18n } from '@/i18n.js';
 import { infoImageUrl } from '@/instance.js';
 import { defaultStore } from '@/store.js';
-
-console.log(defaultStore.state.noteDesign, defaultStore.state.noteDesign === 'sharkey');
 
 const props = defineProps<{
 	pagination: Paging;

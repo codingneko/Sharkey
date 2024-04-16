@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: syuilo and other misskey contributors
+ * SPDX-FileCopyrightText: syuilo and misskey-project
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
@@ -43,6 +43,7 @@ export async function signout() {
 	waiting();
 	miLocalStorage.removeItem('account');
 	await removeAccount($i.id);
+	document.cookie = `token=; path=/; max-age=0${ location.protocol === 'https:' ? '; Secure' : ''}`;
 	const accounts = await getAccounts();
 
 	//#region Remove service worker registration
@@ -200,7 +201,7 @@ export async function login(token: Account['token'], redirect?: string) {
 			throw reason;
 		});
 	miLocalStorage.setItem('account', JSON.stringify(me));
-	document.cookie = `token=${token}; path=/; max-age=31536000`; // bull dashboardの認証とかで使う
+	document.cookie = `token=${token}; path=/; max-age=31536000${ location.protocol === 'https:' ? '; Secure' : ''}`; // bull dashboardの認証とかで使う
 	await addAccount(me.id, token);
 
 	if (redirect) {
@@ -290,7 +291,7 @@ export async function openAccountMenu(opts: {
 			text: i18n.ts.profile,
 			to: `/@${ $i.username }`,
 			avatar: $i,
-		}, { type: 'divider' }, ...(opts.includeCurrentAccount ? [createItem($i)] : []), ...accountItemPromises, {
+		}, { type: 'divider' as const }, ...(opts.includeCurrentAccount ? [createItem($i)] : []), ...accountItemPromises, {
 			type: 'parent' as const,
 			icon: 'ph-plus ph-bold ph-lg',
 			text: i18n.ts.addAccount,

@@ -1,6 +1,6 @@
 <div align="center">
 <a href="https://joinsharkey.org/">
-	<img src="https://raw.githubusercontent.com/transfem-org/Sharkey/5180b4093f30e3bf3ff8d6b16751b69ebed9fb12/packages/frontend/assets/sharkey.svg" alt="Sharkey logo" style="border-radius:50%" width="400"/>
+	<img src="https://activitypub.software/TransFem-org/Sharkey/-/raw/develop/packages/frontend/assets/sharkey.svg" alt="Sharkey logo" style="border-radius:50%" width="300"/>
 </a>
 
 **🌎 **[Sharkey](https://joinsharkey.org/)** is an open source, decentralized social media platform that's free forever! 🚀**
@@ -32,3 +32,4 @@
 Sharkey's original upstream was moved to their own git system on https://git.joinsharkey.org/Sharkey/Sharkey
 
 I will try to keep this repo up to date with Sharkey's upstream.
+

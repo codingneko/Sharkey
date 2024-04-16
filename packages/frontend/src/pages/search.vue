@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: syuilo and other misskey contributors
+SPDX-FileCopyrightText: syuilo and misskey-project
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 
@@ -45,15 +45,15 @@ const headerActions = computed(() => []);
 const headerTabs = computed(() => [{
 	key: 'note',
 	title: i18n.ts.notes,
-	icon: 'ph-pencil ph-bold ph-lg',
+	icon: 'ph-pencil-simple ph-bold ph-lg',
 }, {
 	key: 'user',
 	title: i18n.ts.users,
 	icon: 'ph-users ph-bold ph-lg',
 }]);
 
-definePageMetadata(computed(() => ({
+definePageMetadata(() => ({
 	title: i18n.ts.search,
 	icon: 'ph-magnifying-glass ph-bold ph-lg',
-})));
+}));
 </script>

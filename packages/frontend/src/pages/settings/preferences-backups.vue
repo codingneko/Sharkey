@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: syuilo and other misskey contributors
+SPDX-FileCopyrightText: syuilo and misskey-project
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 
@@ -37,7 +37,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { onMounted, onUnmounted, ref } from 'vue';
 import { v4 as uuid } from 'uuid';
 import FormSection from '@/components/form/section.vue';
 import MkButton from '@/components/MkButton.vue';
@@ -71,6 +71,7 @@ const defaultStoreSaveKeys: (keyof typeof defaultStore['state'])[] = [
 	'animatedMfm',
 	'advancedMfm',
 	'loadRawImages',
+	'warnMissingAltText',
 	'imageNewTab',
 	'dataSaver',
 	'disableShowingAnimatedImages',
@@ -207,6 +208,7 @@ async function saveNew(): Promise<void> {
 
 	const { canceled, result: name } = await os.inputText({
 		title: ts._preferencesBackups.inputName,
+		default: '',
 	});
 	if (canceled) return;
 
@@ -382,6 +384,7 @@ async function rename(id: string): Promise<void> {
 
 	const { canceled: cancel1, result: name } = await os.inputText({
 		title: ts._preferencesBackups.inputName,
+		default: '',
 	});
 	if (cancel1 || profiles.value[id].name === name) return;
 
@@ -448,10 +451,10 @@ onUnmounted(() => {
 	connection?.off('registryUpdated');
 });
 
-definePageMetadata(computed(() => ({
+definePageMetadata(() => ({
 	title: ts.preferencesBackups,
 	icon: 'ph-floppy-disk ph-bold ph-lg',
-})));
+}));
 </script>
 
 <style lang="scss" module>

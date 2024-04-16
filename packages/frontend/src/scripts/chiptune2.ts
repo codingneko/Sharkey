@@ -1,9 +1,12 @@
-/* global libopenmpt UTF8ToString writeAsciiToMemory */
+// @ts-nocheck
 /* eslint-disable */
 
 const ChiptuneAudioContext = window.AudioContext || window.webkitAudioContext;
 
-export function ChiptuneJsConfig (repeatCount: number, context: AudioContext) {
+let libopenmpt
+let libopenmptLoadPromise
+
+export function ChiptuneJsConfig (repeatCount?: number, context?: AudioContext) {
 	this.repeatCount = repeatCount;
 	this.context = context;
 }
@@ -18,6 +21,28 @@ export function ChiptuneJsPlayer (config: object) {
 	this.handlers = [];
 	this.touchLocked = true;
 	this.volume = 1;
+}
+
+ChiptuneJsPlayer.prototype.initialize = function() {
+	if (libopenmptLoadPromise) return libopenmptLoadPromise;
+	if (libopenmpt) return Promise.resolve();
+
+	libopenmptLoadPromise = new Promise(async (resolve, reject) => {
+		try {
+			const { Module } = await import('./libopenmpt/libopenmpt.js');
+			await new Promise((resolve) => {
+				Module['onRuntimeInitialized'] = resolve;
+			})
+			libopenmpt = Module;
+			resolve()
+		} catch (e) {
+			reject(e)
+		} finally {
+			libopenmptLoadPromise = undefined;
+		}
+	})
+
+	return libopenmptLoadPromise;
 }
 
 ChiptuneJsPlayer.prototype.constructor = ChiptuneJsPlayer;
@@ -61,12 +86,12 @@ ChiptuneJsPlayer.prototype.seek = function (position: number) {
 
 ChiptuneJsPlayer.prototype.metadata = function () {
 	const data = {};
-	const keys = UTF8ToString(libopenmpt._openmpt_module_get_metadata_keys(this.currentPlayingNode.modulePtr)).split(';');
+	const keys = libopenmpt.UTF8ToString(libopenmpt._openmpt_module_get_metadata_keys(this.currentPlayingNode.modulePtr)).split(';');
 	let keyNameBuffer = 0;
 	for (const key of keys) {
 		keyNameBuffer = libopenmpt._malloc(key.length + 1);
-		writeAsciiToMemory(key, keyNameBuffer);
-		data[key] = UTF8ToString(libopenmpt._openmpt_module_get_metadata(this.currentPlayingNode.modulePtr, keyNameBuffer));
+		libopenmpt.writeAsciiToMemory(key, keyNameBuffer);
+		data[key] = libopenmpt.UTF8ToString(libopenmpt._openmpt_module_get_metadata(this.currentPlayingNode.modulePtr, keyNameBuffer));
 		libopenmpt._free(keyNameBuffer);
 	}
 	return data;
@@ -84,7 +109,7 @@ ChiptuneJsPlayer.prototype.unlock = function () {
 };
 
 ChiptuneJsPlayer.prototype.load = function (input) {
-	return new Promise((resolve, reject) => {
+	return this.initialize().then(() => new Promise((resolve, reject) => {
 		if(this.touchLocked) {
 			this.unlock();
 		}
@@ -106,7 +131,7 @@ ChiptuneJsPlayer.prototype.load = function (input) {
 				reject(error);
 			});
 		}
-	});
+	}));
 };
 
 ChiptuneJsPlayer.prototype.play = function (buffer: ArrayBuffer) {
@@ -150,6 +175,27 @@ ChiptuneJsPlayer.prototype.getRow = function () {
 	return 0;
 };
 
+ChiptuneJsPlayer.prototype.getNumPatterns = function () {
+	if (this.currentPlayingNode && this.currentPlayingNode.modulePtr) {
+		return libopenmpt._openmpt_module_get_num_patterns(this.currentPlayingNode.modulePtr);
+	}
+	return 0;
+};
+
+ChiptuneJsPlayer.prototype.getCurrentSpeed = function () {
+	if (this.currentPlayingNode && this.currentPlayingNode.modulePtr) {
+		return libopenmpt._openmpt_module_get_current_speed(this.currentPlayingNode.modulePtr);
+	}
+	return 0;
+};
+
+ChiptuneJsPlayer.prototype.getCurrentTempo = function () {
+	if (this.currentPlayingNode && this.currentPlayingNode.modulePtr) {
+		return libopenmpt._openmpt_module_get_current_tempo(this.currentPlayingNode.modulePtr);
+	}
+	return 0;
+};
+
 ChiptuneJsPlayer.prototype.getPatternNumRows = function (pattern: number) {
 	if (this.currentPlayingNode && this.currentPlayingNode.modulePtr) {
 		return libopenmpt._openmpt_module_get_pattern_num_rows(this.currentPlayingNode.modulePtr, pattern);
@@ -159,9 +205,23 @@ ChiptuneJsPlayer.prototype.getPatternNumRows = function (pattern: number) {
 
 ChiptuneJsPlayer.prototype.getPatternRowChannel = function (pattern: number, row: number, channel: number) {
 	if (this.currentPlayingNode && this.currentPlayingNode.modulePtr) {
-		return UTF8ToString(libopenmpt._openmpt_module_format_pattern_row_channel(this.currentPlayingNode.modulePtr, pattern, row, channel, 0, true));
+		return libopenmpt.UTF8ToString(libopenmpt._openmpt_module_format_pattern_row_channel(this.currentPlayingNode.modulePtr, pattern, row, channel, 0, true));
 	}
 	return '';
+};
+
+ChiptuneJsPlayer.prototype.getCtls = function () {
+	if (this.currentPlayingNode && this.currentPlayingNode.modulePtr) {
+		return libopenmpt._openmpt_module_get_ctls(this.currentPlayingNode.modulePtr);
+	}
+	return 0;
+};
+
+ChiptuneJsPlayer.prototype.version = function () {
+	if (this.currentPlayingNode && this.currentPlayingNode.modulePtr) {
+		return libopenmpt._openmpt_get_library_version();
+	}
+	return 0;
 };
 
 ChiptuneJsPlayer.prototype.createLibopenmptNode = function (buffer, config: object) {
@@ -178,6 +238,7 @@ ChiptuneJsPlayer.prototype.createLibopenmptNode = function (buffer, config: obje
 	processNode.paused = false;
 	processNode.leftBufferPtr = libopenmpt._malloc(4 * maxFramesPerChunk);
 	processNode.rightBufferPtr = libopenmpt._malloc(4 * maxFramesPerChunk);
+	processNode.perf = { 'current': 0, 'max': 0 };
 	processNode.cleanup = function () {
 		if (this.modulePtr !== 0) {
 			libopenmpt._openmpt_module_destroy(this.modulePtr);
@@ -205,7 +266,13 @@ ChiptuneJsPlayer.prototype.createLibopenmptNode = function (buffer, config: obje
 	processNode.togglePause = function () {
 		this.paused = !this.paused;
 	};
+	processNode.getProcessTime = function() {
+		const max = this.perf.max;
+		this.perf.max = 0;
+		return { 'current': this.perf.current, 'max': max };
+	};
 	processNode.onaudioprocess = function (e) {
+		let startTimeP1 = performance.now();
 		const outputL = e.outputBuffer.getChannelData(0);
 		const outputR = e.outputBuffer.getChannelData(1);
 		let framesToRender = outputL.length;
@@ -231,11 +298,13 @@ ChiptuneJsPlayer.prototype.createLibopenmptNode = function (buffer, config: obje
 
 		const currentPattern = libopenmpt._openmpt_module_get_current_pattern(this.modulePtr);
 		const currentRow = libopenmpt._openmpt_module_get_current_row(this.modulePtr);
+		startTimeP1 = startTimeP1 - performance.now();
 		if (currentPattern !== this.patternIndex) {
 			processNode.player.fireEvent('onPatternChange');
 		}
 		processNode.player.fireEvent('onRowChange', { index: currentRow });
 
+		const startTimeP2 = performance.now();
 		while (framesToRender > 0) {
 			const framesPerChunk = Math.min(framesToRender, maxFramesPerChunk);
 			const actualFramesPerChunk = libopenmpt._openmpt_module_read_float_stereo(this.modulePtr, this.context.sampleRate, framesPerChunk, this.leftBufferPtr, this.rightBufferPtr);
@@ -262,6 +331,8 @@ ChiptuneJsPlayer.prototype.createLibopenmptNode = function (buffer, config: obje
 			this.cleanup();
 			error ? processNode.player.fireEvent('onError', { type: 'openmpt' }) : processNode.player.fireEvent('onEnded');
 		}
+		this.perf.current = performance.now() - startTimeP2 + startTimeP1;
+		if (this.perf.current > this.perf.max) this.perf.max = this.perf.current;
 	};
 	return processNode;
 };

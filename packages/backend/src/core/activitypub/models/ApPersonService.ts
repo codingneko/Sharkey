@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: syuilo and other misskey contributors
+ * SPDX-FileCopyrightText: syuilo and misskey-project
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
@@ -38,6 +38,7 @@ import { MetaService } from '@/core/MetaService.js';
 import { DriveFileEntityService } from '@/core/entities/DriveFileEntityService.js';
 import type { AccountMoveService } from '@/core/AccountMoveService.js';
 import { checkHttps } from '@/misc/check-https.js';
+import { isNotNull } from '@/misc/is-not-null.js';
 import { getApId, getApType, getOneApHrefNullable, isActor, isCollection, isCollectionOrOrderedCollection, isPropertyValue } from '../type.js';
 import { extractApHashtags } from './tag.js';
 import type { OnModuleInit } from '@nestjs/common';
@@ -126,12 +127,6 @@ export class ApPersonService implements OnModuleInit {
 		this.logger = this.apLoggerService.logger;
 	}
 
-	private punyHost(url: string): string {
-		const urlObj = new URL(url);
-		const host = `${this.utilityService.toPuny(urlObj.hostname)}${urlObj.port.length > 0 ? ':' + urlObj.port : ''}`;
-		return host;
-	}
-
 	/**
 	 * Validate and convert to actor object
 	 * @param x Fetched object
@@ -139,7 +134,7 @@ export class ApPersonService implements OnModuleInit {
 	 */
 	@bindThis
 	private validateActor(x: IObject, uri: string): IActor {
-		const expectHost = this.punyHost(uri);
+		const expectHost = this.utilityService.punyHost(uri);
 
 		if (!isActor(x)) {
 			throw new Error(`invalid Actor type '${x.type}'`);
@@ -151,6 +146,19 @@ export class ApPersonService implements OnModuleInit {
 
 		if (!(typeof x.inbox === 'string' && x.inbox.length > 0)) {
 			throw new Error('invalid Actor: wrong inbox');
+		}
+
+		if (this.utilityService.punyHost(x.inbox) !== expectHost) {
+			throw new Error('invalid Actor: inbox has different host');
+		}
+
+		for (const collection of ['outbox', 'followers', 'following'] as (keyof IActor)[]) {
+			const collectionUri = (x as IActor)[collection];
+			if (typeof collectionUri === 'string' && collectionUri.length > 0) {
+				if (this.utilityService.punyHost(collectionUri) !== expectHost) {
+					throw new Error(`invalid Actor: ${collection} has different host`);
+				}
+			}
 		}
 
 		if (!(typeof x.preferredUsername === 'string' && x.preferredUsername.length > 0 && x.preferredUsername.length <= 128 && /^\w([\w-.]*\w)?$/.test(x.preferredUsername))) {
@@ -176,7 +184,7 @@ export class ApPersonService implements OnModuleInit {
 			x.summary = truncate(x.summary, summaryLength);
 		}
 
-		const idHost = this.punyHost(x.id);
+		const idHost = this.utilityService.punyHost(x.id);
 		if (idHost !== expectHost) {
 			throw new Error('invalid Actor: id has different host');
 		}
@@ -186,7 +194,7 @@ export class ApPersonService implements OnModuleInit {
 				throw new Error('invalid Actor: publicKey.id is not a string');
 			}
 
-			const publicKeyIdHost = this.punyHost(x.publicKey.id);
+			const publicKeyIdHost = this.utilityService.punyHost(x.publicKey.id);
 			if (publicKeyIdHost !== expectHost) {
 				throw new Error('invalid Actor: publicKey.id has different host');
 			}
@@ -225,23 +233,42 @@ export class ApPersonService implements OnModuleInit {
 		return null;
 	}
 
-	private async resolveAvatarAndBanner(user: MiRemoteUser, icon: any, image: any, bgimg: any): Promise<Pick<MiRemoteUser, 'avatarId' | 'bannerId' | 'backgroundId' | 'avatarUrl' | 'bannerUrl' | 'backgroundUrl' | 'avatarBlurhash' | 'bannerBlurhash' | 'backgroundBlurhash'>> {
+	private async resolveAvatarAndBanner(user: MiRemoteUser, icon: any, image: any, bgimg: any): Promise<Partial<Pick<MiRemoteUser, 'avatarId' | 'bannerId' | 'backgroundId' | 'avatarUrl' | 'bannerUrl' | 'backgroundUrl' | 'avatarBlurhash' | 'bannerBlurhash' | 'backgroundBlurhash'>>> {
+		if (user == null) throw new Error('failed to create user: user is null');
+
 		const [avatar, banner, background] = await Promise.all([icon, image, bgimg].map(img => {
-			if (img == null) return null;
-			if (user == null) throw new Error('failed to create user: user is null');
+			// if we have an explicitly missing image, return an
+			// explicitly-null set of values
+			if ((img == null) || (typeof img === 'object' && img.url == null)) {
+				return { id: null, url: null, blurhash: null };
+			}
+
 			return this.apImageService.resolveImage(user, img).catch(() => null);
 		}));
 
+		/*
+			we don't want to return nulls on errors! if the database fields
+			are already null, nothing changes; if the database has old
+			values, we should keep those. The exception is if the remote has
+			actually removed the images: in that case, the block above
+			returns the special {id:null}&c value, and we return those
+		*/
 		return {
-			avatarId: avatar?.id ?? null,
-			bannerId: banner?.id ?? null,
-			backgroundId: background?.id ?? null,
-			avatarUrl: avatar ? this.driveFileEntityService.getPublicUrl(avatar, 'avatar') : null,
-			bannerUrl: banner ? this.driveFileEntityService.getPublicUrl(banner) : null,
-			backgroundUrl: background ? this.driveFileEntityService.getPublicUrl(background) : null,
-			avatarBlurhash: avatar?.blurhash ?? null,
-			bannerBlurhash: banner?.blurhash ?? null,
-			backgroundBlurhash: background?.blurhash ?? null
+			...( avatar ? {
+				avatarId: avatar.id,
+				avatarUrl: avatar.url ? this.driveFileEntityService.getPublicUrl(avatar, 'avatar') : null,
+				avatarBlurhash: avatar.blurhash,
+			} : {}),
+			...( banner ? {
+				bannerId: banner.id,
+				bannerUrl: banner.url ? this.driveFileEntityService.getPublicUrl(banner) : null,
+				bannerBlurhash: banner.blurhash,
+			} : {}),
+			...( background ? {
+				backgroundId: background.id,
+				backgroundUrl: background.url ? this.driveFileEntityService.getPublicUrl(background) : null,
+				backgroundBlurhash: background.blurhash,
+			} : {}),
 		};
 	}
 
@@ -266,7 +293,7 @@ export class ApPersonService implements OnModuleInit {
 
 		this.logger.info(`Creating the Person: ${person.id}`);
 
-		const host = this.punyHost(object.id);
+		const host = this.utilityService.punyHost(object.id);
 
 		const fields = this.analyzeAttachments(person.attachment ?? []);
 
@@ -640,7 +667,7 @@ export class ApPersonService implements OnModuleInit {
 
 			// とりあえずidを別の時間で生成して順番を維持
 			let td = 0;
-			for (const note of featuredNotes.filter((note): note is MiNote => note != null)) {
+			for (const note of featuredNotes.filter(isNotNull)) {
 				td -= 1000;
 				transactionalEntityManager.insert(MiUserNotePining, {
 					id: this.idService.gen(Date.now() + td),
