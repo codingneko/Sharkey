@@ -1,11 +1,9 @@
 <div align="center">
-<a href="https://joinsharkey.org/">
-	<img src="https://activitypub.software/TransFem-org/Sharkey/-/raw/develop/packages/frontend/assets/sharkey.svg" alt="Sharkey logo" style="border-radius:50%" width="300"/>
-</a>
+	<a href="https://joinsharkey.org/">
+		<img src="https://activitypub.software/transfem-org/sharkey/-/raw/develop/packages/frontend/assets/sharkey.svg" alt="sharkey logo" style="border-radius:50%" width="300"/>
+	</a>
 
 **🌎 **[Sharkey](https://joinsharkey.org/)** is an open source, decentralized social media platform that's free forever! 🚀**
-
----
 
 <a href="https://fedidb.org/software/sharkey">
 		<img src="https://custom-icon-badges.herokuapp.com/badge/find_an-instance-acea31?logoColor=acea31&style=for-the-badge&logo=sharkey&labelColor=363B40" alt="find an instance"/></a>
@@ -22,8 +20,6 @@
 <a href="https://ko-fi.com/transfem">
 		<img src="https://custom-icon-badges.herokuapp.com/badge/donate-F96854?logoColor=F96854&style=for-the-badge&logo=kofi&labelColor=363B40" alt="donate"/></a>
 
----
-
 </div>
 
 <div>
@@ -33,3 +29,27 @@ Sharkey's original upstream was moved to their own git system on https://git.joi
 
 I will try to keep this repo up to date with Sharkey's upstream.
 
+## ✨ Features
+- **ActivityPub support**\
+Not on Sharkey? No problem! Not only can Sharkey instances talk to each other, but you can make friends with people on other networks like Mastodon and Pixelfed!
+- **Federated Backgrounds and Music status**\
+You can add a background to your profile as well as a music status via ListenBrainz, show everyone what music you are currently listening to
+- **Mastodon API**\
+Sharkey implements the Mastodon API unlike normal Misskey
+- **UI/UX Improvements**\
+Sharkey makes some UI/UX improvements to make it easier to navigate
+- **Sign-Up Approval**\
+With Sharkey, you can enable sign-ups, subject to manual moderator approval and mandatory user-provided reasons for joining.
+- **Rich Web UI**\
+       Sharkey has a rich and easy to use Web UI!
+       It is highly customizable, from changing the layout and adding widgets to making custom themes.
+       Furthermore, plugins can be created using AiScript, an original programming language.
+- And much more...
+
+</div>
+
+<div style="clear: both;"></div>
+
+## Documentation
+
+Sharkey Documentation can be found at [Sharkey Documentation](https://docs.joinsharkey.org/docs/install/fresh/)

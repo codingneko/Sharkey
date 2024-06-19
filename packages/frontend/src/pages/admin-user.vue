@@ -266,6 +266,7 @@ function createFetcher() {
 		moderator.value = info.value.isModerator;
 		silenced.value = info.value.isSilenced;
 		approved.value = info.value.approved;
+		markedAsNSFW.value = info.value.alwaysMarkNsfw;
 		suspended.value = info.value.isSuspended;
 		moderationNote.value = info.value.moderationNote;
 
@@ -433,7 +434,7 @@ async function assignRole() {
 	if (canceled) return;
 
 	const { canceled: canceled2, result: period } = await os.select({
-		title: i18n.ts.period,
+		title: i18n.ts.period + ': ' + roles.find(r => r.id === roleId)!.name,
 		items: [{
 			value: 'indefinitely', text: i18n.ts.indefinitely,
 		}, {

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import * as yaml from 'js-yaml';
 import { globSync } from 'glob';
+import * as Sentry from '@sentry/node';
 import type { RedisOptions } from 'ioredis';
 
 type RedisOptionsSource = Partial<RedisOptions> & {
@@ -57,6 +58,8 @@ type Source = {
 		index: string;
 		scope?: 'local' | 'global' | string[];
 	};
+	sentryForBackend?: { options: Partial<Sentry.NodeOptions>; enableNodeProfiling: boolean; };
+	sentryForFrontend?: { options: Partial<Sentry.NodeOptions> };
 
 	publishTarballInsteadOfProvideRepositoryUrl?: boolean;
 
@@ -97,6 +100,12 @@ type Source = {
 	perChannelMaxNoteCacheCount?: number;
 	perUserNotificationsMaxCount?: number;
 	deactivateAntennaThreshold?: number;
+
+	import?: {
+		downloadTimeout: number;
+		maxFileSize: number;
+	};
+
 	pidFile: string;
 };
 
@@ -174,9 +183,17 @@ export type Config = {
 	redisForPubsub: RedisOptions & RedisOptionsSource;
 	redisForJobQueue: RedisOptions & RedisOptionsSource;
 	redisForTimelines: RedisOptions & RedisOptionsSource;
+	sentryForBackend: { options: Partial<Sentry.NodeOptions>; enableNodeProfiling: boolean; } | undefined;
+	sentryForFrontend: { options: Partial<Sentry.NodeOptions> } | undefined;
 	perChannelMaxNoteCacheCount: number;
 	perUserNotificationsMaxCount: number;
 	deactivateAntennaThreshold: number;
+
+	import: {
+		downloadTimeout: number;
+		maxFileSize: number;
+	} | undefined;
+
 	pidFile: string;
 };
 
@@ -251,6 +268,8 @@ export function loadConfig(): Config {
 		redisForPubsub: config.redisForPubsub ? convertRedisOptions(config.redisForPubsub, host) : redis,
 		redisForJobQueue: config.redisForJobQueue ? convertRedisOptions(config.redisForJobQueue, host) : redis,
 		redisForTimelines: config.redisForTimelines ? convertRedisOptions(config.redisForTimelines, host) : redis,
+		sentryForBackend: config.sentryForBackend,
+		sentryForFrontend: config.sentryForFrontend,
 		id: config.id,
 		proxy: config.proxy,
 		proxySmtp: config.proxySmtp,
@@ -284,6 +303,7 @@ export function loadConfig(): Config {
 		perChannelMaxNoteCacheCount: config.perChannelMaxNoteCacheCount ?? 1000,
 		perUserNotificationsMaxCount: config.perUserNotificationsMaxCount ?? 500,
 		deactivateAntennaThreshold: config.deactivateAntennaThreshold ?? (1000 * 60 * 60 * 24 * 7),
+		import: config.import,
 		pidFile: config.pidFile,
 	};
 }
@@ -327,11 +347,11 @@ function applyEnvOverrides(config: Source) {
 	// these inner functions recurse through the config structure, using
 	// the given steps, building the env variable name
 
-	function _apply_top(steps: (string | number)[]) {
+	function _apply_top(steps: (string | string[] | number | number[])[]) {
 		_walk('', [], steps);
 	}
 
-	function _walk(name: string, path: (string | number)[], steps: (string | number)[]) {
+	function _walk(name: string, path: (string | number)[], steps: (string | string[] | number | number[])[]) {
 		// are there more steps after this one? recurse
 		if (steps.length > 1) {
 			const thisStep = steps.shift();
@@ -364,13 +384,13 @@ function applyEnvOverrides(config: Source) {
 	}
 
 	function _step2name(step: string|number): string {
-		return step.toString().replaceAll(/[^a-z0-9]+/gi,'').toUpperCase();
+		return step.toString().replaceAll(/[^a-z0-9]+/gi, '').toUpperCase();
 	}
 
 	// this recurses down, bailing out if there's no config to override
-	function _descend(name: string, path: (string | number)[], thisStep: string | number, steps: (string | number)[]) {
+	function _descend(name: string, path: (string | number)[], thisStep: string | number, steps: (string | string[] | number | number[])[]) {
 		name = `${name}${_step2name(thisStep)}_`;
-		path = [ ...path, thisStep ];
+		path = [...path, thisStep];
 		_walk(name, path, steps);
 	}
 
@@ -380,7 +400,7 @@ function applyEnvOverrides(config: Source) {
 		name = `MK_CONFIG_${name}${_step2name(lastStep)}`;
 
 		const val = process.env[name];
-		if (val != null && val != undefined) {
+		if (val !== null && val !== undefined) {
 			_assign(path, lastStep, val);
 		}
 
@@ -390,10 +410,10 @@ function applyEnvOverrides(config: Source) {
 		}
 	}
 
-	const alwaysStrings = { 'chmodSocket': 1 };
+	const alwaysStrings = { 'chmodSocket': true } as { [key: string]: boolean };
 
 	function _assign(path: (string | number)[], lastStep: string | number, value: string) {
-		let thisConfig = config;
+		let thisConfig = config as any;
 		for (const step of path) {
 			if (!thisConfig[step]) {
 				thisConfig[step] = {};
@@ -403,9 +423,11 @@ function applyEnvOverrides(config: Source) {
 
 		if (!alwaysStrings[lastStep]) {
 			if (value.match(/^[0-9]+$/)) {
-				value = parseInt(value);
+				thisConfig[lastStep] = parseInt(value);
+				return;
 			} else if (value.match(/^(true|false)$/i)) {
-				value = !!value.match(/^true$/i);
+				thisConfig[lastStep] = !!value.match(/^true$/i);
+				return;
 			}
 		}
 
@@ -416,13 +438,16 @@ function applyEnvOverrides(config: Source) {
 
 	_apply_top([['url', 'port', 'socket', 'chmodSocket', 'disableHsts']]);
 	_apply_top(['db', ['host', 'port', 'db', 'user', 'pass']]);
-	_apply_top(['dbSlaves', config.dbSlaves?.keys(), ['host', 'port', 'db', 'user', 'pass']]);
+	_apply_top(['dbSlaves', Array.from((config.dbSlaves ?? []).keys()), ['host', 'port', 'db', 'user', 'pass']]);
 	_apply_top([
 		['redis', 'redisForPubsub', 'redisForJobQueue', 'redisForTimelines'],
-		['host','port','username','pass','db','prefix'],
+		['host', 'port', 'username', 'pass', 'db', 'prefix'],
 	]);
 	_apply_top(['meilisearch', ['host', 'port', 'apikey', 'ssl', 'index', 'scope']]);
+	_apply_top([['sentryForFrontend', 'sentryForBackend'], 'options', ['dsn', 'profileSampleRate', 'serverName', 'includeLocalVariables', 'proxy', 'keepAlive', 'caCerts']]);
+	_apply_top(['sentryForBackend', 'enableNodeProfiling']);
 	_apply_top([['clusterLimit', 'deliverJobConcurrency', 'inboxJobConcurrency', 'relashionshipJobConcurrency', 'deliverJobPerSec', 'inboxJobPerSec', 'relashionshipJobPerSec', 'deliverJobMaxAttempts', 'inboxJobMaxAttempts']]);
 	_apply_top([['outgoingAddress', 'outgoingAddressFamily', 'proxy', 'proxySmtp', 'mediaProxy', 'videoThumbnailGenerator']]);
 	_apply_top([['maxFileSize', 'maxNoteLength', 'pidFile']]);
+	_apply_top(['import', ['downloadTimeout', 'maxFileSize']]);
 }
