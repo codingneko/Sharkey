@@ -114,6 +114,10 @@ db:
 
 dbReplications: false
 
+# You can change the log level by setting this 
+# to 'error', 'warning','success', 'debug' or 'info' 
+# logLevel: 'warning'
+
 # You can configure any number of replicas here
 #dbSlaves:
 #  -

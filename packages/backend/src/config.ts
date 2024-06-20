@@ -94,6 +94,8 @@ type Source = {
 
 	customMOTD?: string[];
 
+	logLevel: string;
+
 	signToActivityPubGet?: boolean;
 	checkActivityPubGetSignature?: boolean;
 
@@ -160,6 +162,7 @@ export type Config = {
 	inboxJobMaxAttempts: number | undefined;
 	proxyRemoteFiles: boolean | undefined;
 	customMOTD: string[] | undefined;
+	logLevel: string | undefined;
 	signToActivityPubGet: boolean;
 	checkActivityPubGetSignature: boolean | undefined;
 
@@ -290,6 +293,7 @@ export function loadConfig(): Config {
 		inboxJobMaxAttempts: config.inboxJobMaxAttempts,
 		proxyRemoteFiles: config.proxyRemoteFiles,
 		customMOTD: config.customMOTD,
+		logLevel: config.logLevel,
 		signToActivityPubGet: config.signToActivityPubGet ?? true,
 		checkActivityPubGetSignature: config.checkActivityPubGetSignature,
 		mediaProxy: externalMediaProxy ?? internalMediaProxy,

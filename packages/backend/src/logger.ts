@@ -10,6 +10,9 @@ import { format as dateFormat } from 'date-fns';
 import { bindThis } from '@/decorators.js';
 import { envOption } from './env.js';
 import type { KEYWORD } from 'color-convert/conversions.js';
+import { Inject } from '@nestjs/common';
+import type { Config } from '@/config.js';
+import { DI } from './di-symbols.js';
 
 type Context = {
 	name: string;
@@ -23,6 +26,14 @@ export default class Logger {
 	private context: Context;
 	private parentLogger: Logger | null = null;
 	private store: boolean;
+	private config: Config;
+	private logLevelPriority: {[key in Level]: number} = {
+		error: 1,
+		warning: 2,
+		success: 3,
+		debug: 4,
+		info: 5
+	}
 
 	constructor(context: string, color?: KEYWORD, store = true) {
 		this.context = {
@@ -30,6 +41,11 @@ export default class Logger {
 			color: color,
 		};
 		this.store = store;
+	}
+
+	@Inject(DI.config)
+	importConfig(config: Config) {
+		this.config = config;
 	}
 
 	@bindThis
@@ -75,6 +91,13 @@ export default class Logger {
 		if (data != null) {
 			args.push(data);
 		}
+
+		const configuredLogLevel: Level = (this.config.logLevel !== undefined ? this.config.logLevel : 'warning') as Level;
+
+		if (this.logLevelPriority[configuredLogLevel] < this.logLevelPriority[level]) {
+			return;
+		}
+
 		console.log(...args);
 	}
 
