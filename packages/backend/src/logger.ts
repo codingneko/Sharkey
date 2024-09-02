@@ -94,7 +94,7 @@ export default class Logger {
 			if (this.logLevelPriority[configuredLogLevel] < this.logLevelPriority[level]) {
 				return;
 			}
-		} catch {
+		} catch (e) {
 			const configuredLogLevel: Level = 'warning' as Level;
 			if (this.logLevelPriority[configuredLogLevel] < this.logLevelPriority[level]) {
 				return;
