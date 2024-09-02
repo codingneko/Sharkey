@@ -89,10 +89,16 @@ export default class Logger {
 			args.push(data);
 		}
 
-		const configuredLogLevel: Level = (this.config.logLevel !== undefined ? this.config.logLevel : 'warning') as Level;
-
-		if (this.logLevelPriority[configuredLogLevel] < this.logLevelPriority[level]) {
-			return;
+		try {
+			const configuredLogLevel: Level = this.config.logLevel as Level;
+			if (this.logLevelPriority[configuredLogLevel] < this.logLevelPriority[level]) {
+				return;
+			}
+		} catch (e) {
+			const configuredLogLevel: Level = 'warning' as Level;
+			if (this.logLevelPriority[configuredLogLevel] < this.logLevelPriority[level]) {
+				return;
+			}
 		}
 
 		console.log(...args);
