@@ -13,7 +13,7 @@ import * as terser from 'terser';
 
 import { build as buildLocales } from '../locales/index.js';
 import generateDTS from '../locales/generateDTS.js';
-import meta from '../package.json' assert { type: "json" };
+import meta from '../package.json' with { type: "json" };
 import buildTarball from './tarball.mjs';
 
 const configDir = fileURLToPath(new URL('../.config', import.meta.url));
@@ -35,6 +35,20 @@ async function copyFrontendFonts() {
 
 async function copyFrontendTablerIcons() {
   await fs.cp('./packages/frontend/node_modules/@phosphor-icons/web/src', './built/_frontend_dist_/phosphor-icons', { dereference: true, recursive: true });
+
+  for (const file of [
+		'./built/_frontend_dist_/phosphor-icons/bold/style.css',
+		'./built/_frontend_dist_/phosphor-icons/duotone/style.css',
+		'./built/_frontend_dist_/phosphor-icons/fill/style.css',
+		'./built/_frontend_dist_/phosphor-icons/light/style.css',
+		'./built/_frontend_dist_/phosphor-icons/regular/style.css',
+		'./built/_frontend_dist_/phosphor-icons/thin/style.css',
+  ]) {
+    let source = await fs.readFile(file, { encoding: 'utf-8' });
+    source = source.replaceAll(/(url\(.+?Phosphor.+?\.(?:[a-zA-Z0-9]+))/g, `$1?version=${meta.version}`);
+    await fs.writeFile(file, source);
+  }
+
 }
 
 async function copyFrontendLocales() {

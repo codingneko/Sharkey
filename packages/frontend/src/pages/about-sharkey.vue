@@ -33,11 +33,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 							{{ i18n.tsx._aboutMisskey.thisIsModifiedVersion({ name: instance.name }) }}
 						</MkInfo>
 						<FormLink v-if="instance.repositoryUrl" :to="instance.repositoryUrl" external>
-							<template #icon><i class="ph-code ph-bold ph-lg"></i></template>
+							<template #icon><i class="ti ti-code"></i></template>
 							{{ i18n.ts._aboutMisskey.source }}
 						</FormLink>
 						<FormLink v-if="instance.providesTarball" :to="`/tarball/sharkey-${version}.tar.gz`" external>
-							<template #icon><i class="ph-download ph-bold ph-lg"></i></template>
+							<template #icon><i class="ti ti-download"></i></template>
 							{{ i18n.ts._aboutMisskey.source }}
 							<template #suffix>Tarball</template>
 						</FormLink>
@@ -63,7 +63,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<FormSection>
 					<div class="_gaps_s">
 						<FormLink to="https://github.com/misskey-dev/misskey" external>
-							<template #icon><i class="ph-code ph-bold ph-lg"></i></template>
+							<template #icon><i class="ti ti-code"></i></template>
 							{{ i18n.ts._aboutMisskey.source }} ({{ i18n.ts._aboutMisskey.original }})
 							<template #suffix>GitHub</template>
 						</FormLink>
@@ -119,9 +119,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 							<img src="https://antani.cyou/proxy/avatar.webp?url=https%3A%2F%2Fantani.cyou%2Ffiles%2Fa2944119-024c-4abd-86e5-64bf0d30b26f&avatar=1" :class="$style.contributorAvatar">
 							<span :class="$style.contributorUsername">@lucent</span>
 						</a>
-						<a href="https://karilaa.app/@karilaa" target="_blank" :class="$style.contributor">
-							<img src="https://karilaa.app/proxy/avatar.webp?url=https%3A%2F%2Fkarilaa.app%2Ffiles%2Fc366e6f9-96d8-4d3b-b996-30e0a7cb3c5a&avatar=1" :class="$style.contributorAvatar">
-							<span :class="$style.contributorUsername">@karilaa</span>
+						<a href="https://plasmatrap.com/@privateger" target="_blank" :class="$style.contributor">
+							<img src="https://mediaproxy.plasmatrap.com/?url=https%3A%2F%2Fplasmatrap.com%2Ffiles%2F2cf35a8f-6520-4d4c-9611-bf22ee983293&avatar=1" :class="$style.contributorAvatar">
+							<span :class="$style.contributorUsername">@privateger</span>
 						</a>
 						<a href="https://thetransagenda.gay/@phoenix_fairy" target="_blank" :class="$style.contributor">
 							<img src="https://thetransagenda.gay/proxy/avatar.webp?url=https%3A%2F%2Fs3.us-east-005.backblazeb2.com%2Ftranssharkey%2Fnull%2Fd93ac6dc-2020-4b5a-bce7-84b41e97a0ac.png&avatar=1" :class="$style.contributorAvatar">
