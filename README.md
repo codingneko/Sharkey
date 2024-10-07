@@ -25,7 +25,7 @@
 <div>
 	
 # Repo is being Moved
-Sharkey's original upstream was moved to their own git system on https://git.joinsharkey.org/Sharkey/Sharkey
+Sharkey's original upstream was moved to their own git system on https://activitypub.software/TransFem-org/Sharkey
 
 I will try to keep this repo up to date with Sharkey's upstream.
 
