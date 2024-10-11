@@ -165,6 +165,14 @@ export const defaultStore = markRaw(new Storage('base', {
 		where: 'account',
 		default: 'public' as 'public' | 'home' | 'followers',
 	},
+	trustedDomains: {
+		where: 'account',
+		default: [] as string[],
+	},
+	warnExternalUrl: {
+		where: 'account',
+		default: true,
+	},
 
 	menu: {
 		where: 'deviceAccount',
@@ -287,6 +295,10 @@ export const defaultStore = markRaw(new Storage('base', {
 	disableShowingAnimatedImages: {
 		where: 'device',
 		default: window.matchMedia('(prefers-reduced-motion)').matches,
+	},
+	disableCatSpeak: {
+		where: 'account',
+		default: false,
 	},
 	emojiStyle: {
 		where: 'device',

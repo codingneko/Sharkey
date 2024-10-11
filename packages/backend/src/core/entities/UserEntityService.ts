@@ -53,6 +53,7 @@ import type { OnModuleInit } from '@nestjs/common';
 import type { NoteEntityService } from './NoteEntityService.js';
 import type { DriveFileEntityService } from './DriveFileEntityService.js';
 import type { PageEntityService } from './PageEntityService.js';
+import { isSystemAccount } from '@/misc/is-system-account.js';
 
 const Ajv = _Ajv.default;
 const ajv = new Ajv();
@@ -525,6 +526,7 @@ export class UserEntityService implements OnModuleInit {
 				flipH: ud.flipH || undefined,
 				offsetX: ud.offsetX || undefined,
 				offsetY: ud.offsetY || undefined,
+				showBelow: ud.showBelow || undefined,
 				url: decorations.find(d => d.id === ud.id)!.url,
 			}))) : [],
 			isBot: user.isBot,
@@ -613,6 +615,7 @@ export class UserEntityService implements OnModuleInit {
 				backgroundId: user.backgroundId,
 				isModerator: isModerator,
 				isAdmin: isAdmin,
+				isSystem: isSystemAccount(user),
 				injectFeaturedNote: profile!.injectFeaturedNote,
 				receiveAnnouncementEmail: profile!.receiveAnnouncementEmail,
 				alwaysMarkNsfw: profile!.alwaysMarkNsfw,

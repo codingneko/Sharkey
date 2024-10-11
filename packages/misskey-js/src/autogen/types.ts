@@ -2748,6 +2748,22 @@ export type paths = {
      */
     post: operations['notes___featured'];
   };
+  '/notes/following': {
+    /**
+     * notes/following
+     * @description No description provided.
+     *
+     * **Credential required**: *Yes* / **Permission**: *read:account*
+     */
+    get: operations['notes___following'];
+    /**
+     * notes/following
+     * @description No description provided.
+     *
+     * **Credential required**: *Yes* / **Permission**: *read:account*
+     */
+    post: operations['notes___following'];
+  };
   '/notes/global-timeline': {
     /**
      * notes/global-timeline
@@ -3673,7 +3689,7 @@ export type paths = {
   '/sponsors': {
     /**
      * sponsors
-     * @description Get Sharkey GH Sponsors
+     * @description Get Sharkey Sponsors or Instance Sponsors
      *
      * **Credential required**: *No*
      */
@@ -3814,11 +3830,14 @@ export type components = {
           url: string;
           offsetX?: number;
           offsetY?: number;
+          showBelow?: boolean;
         }[];
       /** @default false */
       isAdmin?: boolean;
       /** @default false */
       isModerator?: boolean;
+      /** @default false */
+      isSystem?: boolean;
       isSilenced: boolean;
       noindex: boolean;
       isBot?: boolean;
@@ -5061,6 +5080,7 @@ export type components = {
       infoImageUrl: string | null;
       notFoundImageUrl: string | null;
       iconUrl: string | null;
+      sidebarLogoUrl: string | null;
       maxNoteTextLength: number;
       ads: {
           /**
@@ -5096,6 +5116,7 @@ export type components = {
        * @enum {string}
        */
       noteSearchableScope: 'local' | 'global';
+      trustedLinkUrlPatterns: string[];
     };
     MetaDetailedOnly: {
       features?: {
@@ -5193,10 +5214,11 @@ export type operations = {
             iconUrl: string | null;
             app192IconUrl: string | null;
             app512IconUrl: string | null;
+            sidebarLogoUrl: string | null;
             enableEmail: boolean;
             enableServiceWorker: boolean;
             translatorAvailable: boolean;
-            silencedHosts?: string[];
+            silencedHosts: string[];
             mediaSilencedHosts: string[];
             pinnedUsers: string[];
             hiddenTags: string[];
@@ -5291,6 +5313,7 @@ export type operations = {
             urlPreviewRequireContentLength: boolean;
             urlPreviewUserAgent: string | null;
             urlPreviewSummaryProxyUrl: string | null;
+            trustedLinkUrlPatterns: string[];
           };
         };
       };
@@ -7950,6 +7973,7 @@ export type operations = {
           host: string;
           isSuspended?: boolean;
           isNSFW?: boolean;
+          rejectReports?: boolean;
           moderationNote?: string;
         };
       };
@@ -9055,6 +9079,7 @@ export type operations = {
           'application/json': {
             email: string | null;
             emailVerified: boolean;
+            approved: boolean;
             autoAcceptFollowed: boolean;
             noCrawle: boolean;
             preventAiLearning: boolean;
@@ -9194,6 +9219,7 @@ export type operations = {
               }]>;
             };
             isModerator: boolean;
+            isSystem: boolean;
             isSilenced: boolean;
             isSuspended: boolean;
             isHibernated: boolean;
@@ -9706,6 +9732,7 @@ export type operations = {
           iconUrl?: string | null;
           app192IconUrl?: string | null;
           app512IconUrl?: string | null;
+          sidebarLogoUrl?: string | null;
           backgroundImageUrl?: string | null;
           logoImageUrl?: string | null;
           name?: string | null;
@@ -9811,6 +9838,7 @@ export type operations = {
           urlPreviewRequireContentLength?: boolean;
           urlPreviewUserAgent?: string | null;
           urlPreviewSummaryProxyUrl?: string | null;
+          trustedLinkUrlPatterns?: string[] | null;
         };
       };
     };
@@ -20224,6 +20252,7 @@ export type operations = {
               flipH?: boolean | null;
               offsetX?: number | null;
               offsetY?: number | null;
+              showBelow?: boolean | null;
             })[];
           /** Format: misskey:id */
           bannerId?: string | null;
@@ -22131,6 +22160,68 @@ export type operations = {
           untilId?: string;
           /** Format: misskey:id */
           channelId?: string | null;
+        };
+      };
+    };
+    responses: {
+      /** @description OK (with results) */
+      200: {
+        content: {
+          'application/json': components['schemas']['Note'][];
+        };
+      };
+      /** @description Client error */
+      400: {
+        content: {
+          'application/json': components['schemas']['Error'];
+        };
+      };
+      /** @description Authentication error */
+      401: {
+        content: {
+          'application/json': components['schemas']['Error'];
+        };
+      };
+      /** @description Forbidden error */
+      403: {
+        content: {
+          'application/json': components['schemas']['Error'];
+        };
+      };
+      /** @description I'm Ai */
+      418: {
+        content: {
+          'application/json': components['schemas']['Error'];
+        };
+      };
+      /** @description Internal server error */
+      500: {
+        content: {
+          'application/json': components['schemas']['Error'];
+        };
+      };
+    };
+  };
+  /**
+   * notes/following
+   * @description No description provided.
+   *
+   * **Credential required**: *Yes* / **Permission**: *read:account*
+   */
+  notes___following: {
+    requestBody: {
+      content: {
+        'application/json': {
+          /** @default false */
+          mutualsOnly?: boolean;
+          /** @default 10 */
+          limit?: number;
+          /** Format: misskey:id */
+          sinceId?: string;
+          /** Format: misskey:id */
+          untilId?: string;
+          sinceDate?: number;
+          untilDate?: number;
         };
       };
     };
@@ -27988,7 +28079,7 @@ export type operations = {
   };
   /**
    * sponsors
-   * @description Get Sharkey GH Sponsors
+   * @description Get Sharkey Sponsors or Instance Sponsors
    *
    * **Credential required**: *No*
    */
@@ -27998,6 +28089,8 @@ export type operations = {
         'application/json': {
           /** @default false */
           forceUpdate?: boolean;
+          /** @default false */
+          instance?: boolean;
         };
       };
     };

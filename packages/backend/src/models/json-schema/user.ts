@@ -104,6 +104,10 @@ export const packedUserLiteSchema = {
 						type: 'number',
 						nullable: false, optional: true,
 					},
+					showBelow: {
+						type: 'boolean',
+						nullable: false, optional: true,
+					},
 				},
 			},
 		},
@@ -113,6 +117,11 @@ export const packedUserLiteSchema = {
 			default: false,
 		},
 		isModerator: {
+			type: 'boolean',
+			nullable: false, optional: true,
+			default: false,
+		},
+		isSystem: {
 			type: 'boolean',
 			nullable: false, optional: true,
 			default: false,

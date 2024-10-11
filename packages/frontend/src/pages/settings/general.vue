@@ -56,8 +56,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</MkSwitch>
 				<MkSwitch v-model="collapseNotesRepliedTo">{{ i18n.ts.collapseNotesRepliedTo }}</MkSwitch>
 				<MkSwitch v-model="collapseFiles">{{ i18n.ts.collapseFiles }}</MkSwitch>
-				<MkSwitch v-model="uncollapseCW">Uncollapse CWs on notes</MkSwitch>
-				<MkSwitch v-model="expandLongNote">Always expand long notes</MkSwitch>
+				<MkSwitch v-model="uncollapseCW">{{ i18n.ts.uncollapseCW }}</MkSwitch>
+				<MkSwitch v-model="expandLongNote">{{ i18n.ts.expandLongNote }}</MkSwitch>
 				<MkSwitch v-model="showNoteActionsOnlyHover">{{ i18n.ts.showNoteActionsOnlyHover }}</MkSwitch>
 				<MkSwitch v-model="showClipButtonInNoteFooter">{{ i18n.ts.showClipButtonInNoteFooter }}</MkSwitch>
 				<MkSwitch v-model="autoloadConversation">{{ i18n.ts.autoloadConversation }}</MkSwitch>
@@ -67,7 +67,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<MkSwitch v-model="showReactionsCount">{{ i18n.ts.showReactionsCount }}</MkSwitch>
 				<MkSwitch v-model="showGapBetweenNotesInTimeline">{{ i18n.ts.showGapBetweenNotesInTimeline }}</MkSwitch>
 				<MkSwitch v-model="loadRawImages">{{ i18n.ts.loadRawImages }}</MkSwitch>
-				<MkSwitch v-model="showTickerOnReplies">Show instance ticker on replies</MkSwitch>
+				<MkSwitch v-model="showTickerOnReplies">{{ i18n.ts.showTickerOnReplies }}</MkSwitch>
+				<MkSwitch v-model="disableCatSpeak">{{ i18n.ts.disableCatSpeak }}</MkSwitch>
 				<MkSelect v-model="searchEngine" placeholder="Other">
 					<template #label>{{ i18n.ts.searchEngine }}</template>
 					<option
@@ -230,11 +231,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<MkSwitch v-model="enableInfiniteScroll">{{ i18n.ts.enableInfiniteScroll }}</MkSwitch>
 				<MkSwitch v-model="keepScreenOn">{{ i18n.ts.keepScreenOn }}</MkSwitch>
 				<MkSwitch v-model="clickToOpen">{{ i18n.ts.clickToOpen }}</MkSwitch>
-				<MkSwitch v-model="showBots">{{ i18n.ts.showBots }}</MkSwitch>
 				<MkSwitch v-model="disableStreamingTimeline">{{ i18n.ts.disableStreamingTimeline }}</MkSwitch>
 				<MkSwitch v-model="enableHorizontalSwipe">{{ i18n.ts.enableHorizontalSwipe }}</MkSwitch>
 				<MkSwitch v-model="alwaysConfirmFollow">{{ i18n.ts.alwaysConfirmFollow }}</MkSwitch>
 				<MkSwitch v-model="confirmWhenRevealingSensitiveMedia">{{ i18n.ts.confirmWhenRevealingSensitiveMedia }}</MkSwitch>
+				<MkSwitch v-model="warnExternalUrl">{{ i18n.ts.warnExternalUrl }}</MkSwitch>
 			</div>
 			<MkSelect v-model="serverDisconnectedBehavior">
 				<template #label>{{ i18n.ts.whenServerDisconnected }}</template>
@@ -376,14 +377,6 @@ const limitWidthOfReaction = computed(defaultStore.makeGetterSetter('limitWidthO
 const collapseRenotes = computed(defaultStore.makeGetterSetter('collapseRenotes'));
 const collapseNotesRepliedTo = computed(defaultStore.makeGetterSetter('collapseNotesRepliedTo'));
 const clickToOpen = computed(defaultStore.makeGetterSetter('clickToOpen'));
-// copied from src/pages/timeline.vue
-const showBots = computed<boolean>({
-	get: () => defaultStore.reactiveState.tl.value.filter.withBots,
-	set: (newValue) => {
-		const out = deepMerge({ filter: { withBots: newValue } }, defaultStore.state.tl);
-		defaultStore.set('tl', out);
-	},
-});
 const collapseFiles = computed(defaultStore.makeGetterSetter('collapseFiles'));
 const autoloadConversation = computed(defaultStore.makeGetterSetter('autoloadConversation'));
 const reduceAnimation = computed(defaultStore.makeGetterSetter('animation', v => !v, v => !v));
@@ -400,6 +393,7 @@ const disableShowingAnimatedImages = computed(defaultStore.makeGetterSetter('dis
 const forceShowAds = computed(defaultStore.makeGetterSetter('forceShowAds'));
 const oneko = computed(defaultStore.makeGetterSetter('oneko'));
 const loadRawImages = computed(defaultStore.makeGetterSetter('loadRawImages'));
+const disableCatSpeak = computed(defaultStore.makeGetterSetter('disableCatSpeak'));
 const highlightSensitiveMedia = computed(defaultStore.makeGetterSetter('highlightSensitiveMedia'));
 const imageNewTab = computed(defaultStore.makeGetterSetter('imageNewTab'));
 const enableFaviconNotificationDot = computed(defaultStore.makeGetterSetter('enableFaviconNotificationDot'));
@@ -435,6 +429,7 @@ const useNativeUIForVideoAudioPlayer = computed(defaultStore.makeGetterSetter('u
 const alwaysConfirmFollow = computed(defaultStore.makeGetterSetter('alwaysConfirmFollow'));
 const confirmWhenRevealingSensitiveMedia = computed(defaultStore.makeGetterSetter('confirmWhenRevealingSensitiveMedia'));
 const contextMenu = computed(defaultStore.makeGetterSetter('contextMenu'));
+const warnExternalUrl = computed(defaultStore.makeGetterSetter('warnExternalUrl'));
 
 watch(lang, () => {
 	miLocalStorage.setItem('lang', lang.value as string);
@@ -496,6 +491,7 @@ watch([
 	alwaysConfirmFollow,
 	confirmWhenRevealingSensitiveMedia,
 	contextMenu,
+	warnExternalUrl,
 ], async () => {
 	await reloadAsk();
 });
