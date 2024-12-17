@@ -15,14 +15,14 @@
  */
 
 :root {
-	--MI-radius-xs: 5px;
-	--MI-radius-sm: 5px;
-	--MI-radius: 5px;
-	--MI-radius-md: 5px;
-	--MI-radius-lg: 5px;
-	--MI-radius-xl: 5px;
-	--MI-radius-ellipse: 5px;
-	--MI-radius-full: 5px;
+	--MI-radius-xs: 4px;
+	--MI-radius-sm: 8px;
+	--MI-radius: 12px;
+	--MI-radius-md: 16px;
+	--MI-radius-lg: 24px;
+	--MI-radius-xl: 32px;
+	--MI-radius-ellipse: 999px;
+	--MI-radius-full: 100%;
 
 	--MI-marginFull: 16px;
 	--MI-marginHalf: 10px;
@@ -41,15 +41,15 @@
 	}
 }
 
-html.radius-misskey {
-	--MI-radius-xs: 4px;
-	--MI-radius-sm: 8px;
-	--MI-radius: 12px;
-	--MI-radius-md: 16px;
-	--MI-radius-lg: 24px;
-	--MI-radius-xl: 32px;
-	--MI-radius-ellipse: 999px;
-	--MI-radius-full: 100%;
+html.radius-sharkey {
+	--MI-radius-xs: 5px;
+	--MI-radius-sm: 5px;
+	--MI-radius: 5px;
+	--MI-radius-md: 5px;
+	--MI-radius-lg: 5px;
+	--MI-radius-xl: 5px;
+	--MI-radius-ellipse: 5px;
+	--MI-radius-full: 5px;
 }
 
 ::selection {
