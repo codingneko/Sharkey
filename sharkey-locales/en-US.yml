@@ -17,6 +17,7 @@ emailDestination: "Destination address"
 date: "Date"
 renote: "Boost"
 unrenote: "Remove boost"
+renoteShift: "Boost (hold Shift for visibility menu)"
 renoted: "Boosted."
 quoted: "Quoted."
 rmboost: "Unboosted."
@@ -270,6 +271,7 @@ _profile:
   changeBackground: "Change background"
   updateBackground: "Update background"
   removeBackground: "Remove background"
+  listenbrainz: "ListenBrainz username"
 _timelines:
   bubble: "Bubble"
 _pages:
@@ -383,6 +385,8 @@ _mfm:
   fadeDescription: 'Fade text in and out.'
   background: "Background color"
   backgroundDescription: "Change the background color of text."
+  border: "Border"
+  borderDescription: "Draw a border around the content."
   plain: "Plain"
   plainDescription: "Deactivates the effects of all MFM contained within this MFM effect."
 _animatedMFM:
@@ -430,3 +434,16 @@ scheduledNotes: "Scheduled Notes"
 _permissions:
   "read:notes-schedule": "View your list of scheduled notes"
   "write:notes-schedule": "Compose or delete scheduled notes"
+
+robotsTxt: "Custom robots.txt"
+robotsTxtDescription: "Adding entries here will override the default robots.txt packaged with Sharkey."
+
+defaultCW: "Default content warning for new posts"
+defaultCWDescription: "The value here will be auto-filled as the content warning for all new posts and replies."
+defaultCWPriority: "Automatic CW priority"
+defaultCWPriorityDescription: "Select preferred action when default CW and keep CW settings are both enabled at the same time."
+_defaultCWPriority:
+  default: "Use Default (use the default CW, ignoring the inherited CW)"
+  parent: "Use Parent (use the inherited CW, ignoring the default CW)"
+  defaultParent: "Use Default, then Parent (use the default CW, and append the inherited CW)"
+  parentDefault: "Use Parent, then Default (use the inherited CW, and append the default CW)"
