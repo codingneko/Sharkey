@@ -134,6 +134,14 @@ export const packedUserLiteSchema = {
 			type: 'boolean',
 			nullable: false, optional: false,
 		},
+		mandatoryCW: {
+			type: 'string',
+			nullable: true, optional: false,
+		},
+		rejectQuotes: {
+			type: 'boolean',
+			nullable: false, optional: true,
+		},
 		isBot: {
 			type: 'boolean',
 			nullable: false, optional: true,
