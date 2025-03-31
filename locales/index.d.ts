@@ -8551,7 +8551,7 @@ export interface Locale extends ILocale {
          */
         "write:admin:nsfw-user": string;
         /**
-         * Mark users an not NSFW
+         * Mark users as not NSFW
          */
         "write:admin:unnsfw-user": string;
         /**
@@ -9064,6 +9064,14 @@ export interface Locale extends ILocale {
          * フォローを承認制にしている場合、フォローリクエストを許可した時に表示されます。
          */
         "followedMessageDescriptionForLockedAccount": string;
+        /**
+         * Update avatar
+         */
+        "updateAvatar": string;
+        /**
+         * Remove avatar
+         */
+        "removeAvatar": string;
         /**
          * Update banner
          */
@@ -10235,7 +10243,7 @@ export interface Locale extends ILocale {
          */
         "setRemoteInstanceNSFW": string;
         /**
-         * Set remote instance as NSFW
+         * Unset remote instance as NSFW
          */
         "unsetRemoteInstanceNSFW": string;
         /**
@@ -11630,6 +11638,10 @@ export interface Locale extends ILocale {
      */
     "pendingFollowRequests": string;
     /**
+     * Are you sure you want to cancel your follow request?
+     */
+    "undoFollowRequestConfirm": string;
+    /**
      * Show quotes
      */
     "showQuotes": string;
@@ -12213,12 +12225,68 @@ export interface Locale extends ILocale {
      * Applies a content warning to all posts created by this user. If the post already has a CW, then this is appended to the end.
      */
     "mandatoryCWDescription": string;
+    /**
+     * Fetch linked note
+     */
+    "fetchLinkedNote": string;
     "_processErrors": {
         /**
          * Unable to process quote. This post may be missing context.
          */
         "quoteUnavailable": string;
     };
+    /**
+     * Authorized Fetch
+     */
+    "authorizedFetchSection": string;
+    /**
+     * Allow unsigned ActivityPub requests:
+     */
+    "authorizedFetchLabel": string;
+    /**
+     * This setting controls the behavior when a remote instance or user attempts to access your content without verifying their identity. If disabled, any remote user can access your profile and posts - even one who has been blocked or defederated.
+     */
+    "authorizedFetchDescription": string;
+    "_authorizedFetchValue": {
+        /**
+         * Never
+         */
+        "never": string;
+        /**
+         * Always
+         */
+        "always": string;
+        /**
+         * Only for essential metadata
+         */
+        "essential": string;
+        /**
+         * Use staff recommendation
+         */
+        "staff": string;
+    };
+    "_authorizedFetchValueDescription": {
+        /**
+         * Block all unsigned requests. Improves privacy and makes blocks more effective, but is not compatible with some very old or uncommon instance software.
+         */
+        "never": string;
+        /**
+         * Allow all unsigned requests. Provides the greatest compatibility with other instances, but reduces privacy and weakens blocks.
+         */
+        "always": string;
+        /**
+         * Allow some limited unsigned requests. Provides a hybrid between "Never" and "Always" by exposing only the minimum profile metadata that is required for federation with older software.
+         */
+        "essential": string;
+        /**
+         * Use the default value of "{value}" recommended by the instance staff.
+         */
+        "staff": ParameterizedString<"value">;
+    };
+    /**
+     * The configuration property 'checkActivityPubGetSignature' has been deprecated and replaced with the new Authorized Fetch setting. Please remove it from your configuration file.
+     */
+    "authorizedFetchLegacyWarning": string;
 }
 declare const locales: {
     [lang: string]: Locale;

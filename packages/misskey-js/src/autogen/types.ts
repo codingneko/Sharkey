@@ -4276,6 +4276,8 @@ export type components = {
       defaultCW: string | null;
       /** @enum {string} */
       defaultCWPriority: 'default' | 'parent' | 'defaultParent' | 'parentDefault';
+      /** @enum {string} */
+      allowUnsignedFetch: 'never' | 'always' | 'essential' | 'staff';
     };
     UserDetailedNotMe: components['schemas']['UserLite'] & components['schemas']['UserDetailedNotMeOnly'];
     MeDetailed: components['schemas']['UserLite'] & components['schemas']['UserDetailedNotMeOnly'] & components['schemas']['MeDetailedOnly'];
@@ -5385,6 +5387,8 @@ export type components = {
       requireSetup: boolean;
       cacheRemoteFiles: boolean;
       cacheRemoteSensitiveFiles: boolean;
+      /** @enum {string} */
+      allowUnsignedFetch: 'never' | 'always' | 'essential';
     };
     MetaDetailed: components['schemas']['MetaLite'] & components['schemas']['MetaDetailedOnly'];
     SystemWebhook: {
@@ -8826,6 +8830,8 @@ export type operations = {
             deeplIsPro: boolean;
             deeplFreeMode: boolean;
             deeplFreeInstance: string | null;
+            libreTranslateURL: string | null;
+            libreTranslateKey: string | null;
             defaultDarkTheme: string | null;
             defaultLightTheme: string | null;
             description: string | null;
@@ -8858,6 +8864,9 @@ export type operations = {
             trustedLinkUrlPatterns: string[];
             federation: string;
             federationHosts: string[];
+            hasLegacyAuthFetchSetting: boolean;
+            /** @enum {string} */
+            allowUnsignedFetch: 'never' | 'always' | 'essential';
           };
         };
       };
@@ -11401,6 +11410,8 @@ export type operations = {
           deeplIsPro?: boolean;
           deeplFreeMode?: boolean;
           deeplFreeInstance?: string | null;
+          libreTranslateURL?: string | null;
+          libreTranslateKey?: string | null;
           enableEmail?: boolean;
           email?: string | null;
           smtpSecure?: boolean;
@@ -11472,6 +11483,8 @@ export type operations = {
           /** @enum {string} */
           federation?: 'all' | 'none' | 'specified';
           federationHosts?: string[];
+          /** @enum {string} */
+          allowUnsignedFetch?: 'never' | 'always' | 'essential';
         };
       };
     };
@@ -22967,6 +22980,8 @@ export type operations = {
           defaultCW?: string | null;
           /** @enum {string} */
           defaultCWPriority?: 'default' | 'parent' | 'defaultParent' | 'parentDefault';
+          /** @enum {string} */
+          allowUnsignedFetch?: 'never' | 'always' | 'essential' | 'staff';
         };
       };
     };

@@ -8,6 +8,7 @@ import type { MiMeta } from '@/models/Meta.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { MetaService } from '@/core/MetaService.js';
+import { instanceUnsignedFetchOptions } from '@/const.js';
 
 export const meta = {
 	tags: ['admin'],
@@ -107,6 +108,8 @@ export const paramDef = {
 		deeplIsPro: { type: 'boolean' },
 		deeplFreeMode: { type: 'boolean' },
 		deeplFreeInstance: { type: 'string', nullable: true },
+		libreTranslateURL: { type: 'string', nullable: true },
+		libreTranslateKey: { type: 'string', nullable: true },
 		enableEmail: { type: 'boolean' },
 		email: { type: 'string', nullable: true },
 		smtpSecure: { type: 'boolean' },
@@ -202,6 +205,11 @@ export const paramDef = {
 			items: {
 				type: 'string',
 			},
+		},
+		allowUnsignedFetch: {
+			type: 'string',
+			enum: instanceUnsignedFetchOptions,
+			nullable: false,
 		},
 	},
 	required: [],
@@ -577,6 +585,22 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				}
 			}
 
+			if (ps.libreTranslateURL !== undefined) {
+				if (ps.libreTranslateURL === '') {
+					set.libreTranslateURL = null;
+				} else {
+					set.libreTranslateURL = ps.libreTranslateURL;
+				}
+			}
+
+			if (ps.libreTranslateKey !== undefined) {
+				if (ps.libreTranslateKey === '') {
+					set.libreTranslateKey = null;
+				} else {
+					set.libreTranslateKey = ps.libreTranslateKey;
+				}
+			}
+
 			if (ps.enableIpLogging !== undefined) {
 				set.enableIpLogging = ps.enableIpLogging;
 			}
@@ -733,6 +757,10 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 			if (Array.isArray(ps.federationHosts)) {
 				set.federationHosts = ps.federationHosts.filter(Boolean).map(x => x.toLowerCase());
+			}
+
+			if (ps.allowUnsignedFetch !== undefined) {
+				set.allowUnsignedFetch = ps.allowUnsignedFetch;
 			}
 
 			const before = await this.metaService.fetch(true);

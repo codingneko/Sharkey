@@ -37,6 +37,11 @@ export default [
 			'no-restricted-imports': ['error', {
 				paths: [{ name: 'punycode' }],
 			}],
+			// https://typescript-eslint.io/rules/prefer-nullish-coalescing/
+			'@typescript-eslint/prefer-nullish-coalescing': ['warn', {
+				ignorePrimitives: true,
+			}],
+			'no-param-reassign': 'off',
 		},
 	},
 ];
