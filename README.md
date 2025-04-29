@@ -29,6 +29,8 @@ Sharkey's original upstream was moved to their own git system on https://activit
 
 I will try to keep this repo up to date with Sharkey's upstream.
 
+<a href="https://joinsharkey.org/"><img src="assets/sharkey.webp" align="right" height="520px"/></a>
+
 ## ✨ Features
 - **ActivityPub support**\
 Not on Sharkey? No problem! Not only can Sharkey instances talk to each other, but you can make friends with people on other networks like Mastodon and Pixelfed!
