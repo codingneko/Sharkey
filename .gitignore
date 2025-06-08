@@ -89,3 +89,7 @@ vite.config.local-dev.ts.timestamp-*
 backup_cron.sh
 # Sharkey
 /packages/megalodon/lib
+
+# TypeScript
+.tsbuildinfo
+*.tsbuildinfo
