@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -->
 
 <template>
-<PageWithHeader v-model:tab="tab" :actions="headerActions" :tabs="headerTabs" :spacer="true" style="--MI_SPACER-w: 600px; --MI_SPACER-min: 16px; --MI_SPACER-max: 32px;">
+<PageWithHeader v-model:tab="tab" :actions="headerActions" :tabs="headerTabs" :spacer="true" style="--MI_SPACER-w: 700px; --MI_SPACER-min: 16px; --MI_SPACER-max: 32px;">
 	<div v-if="instance">
 		<!-- This empty div is preserved to avoid merge conflicts -->
 		<div>
@@ -203,7 +203,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 </template>
 
 <script lang="ts" setup>
-import { ref, computed, watch, useCssModule } from 'vue';
+import { ref, computed } from 'vue';
 import * as Misskey from 'misskey-js';
 import type { ChartSrc } from '@/components/MkChart.vue';
 import type { Paging } from '@/components/MkPagination.vue';
@@ -231,12 +231,9 @@ import MkTextarea from '@/components/MkTextarea.vue';
 import MkInfo from '@/components/MkInfo.vue';
 import { $i } from '@/i.js';
 import { copyToClipboard } from '@/utility/copy-to-clipboard';
-import { acct } from '@/filters/user';
 import MkFolder from '@/components/MkFolder.vue';
 import MkNumber from '@/components/MkNumber.vue';
 import SkBadgeStrip from '@/components/SkBadgeStrip.vue';
-
-const $style = useCssModule();
 
 const props = withDefaults(defineProps<{
 	host: string;

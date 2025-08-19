@@ -26,6 +26,14 @@ export type DataElement = DataObject | Error | string | null;
 // https://stackoverflow.com/questions/61148466/typescript-type-that-matches-any-object-but-not-arrays
 export type DataObject = Record<string, unknown> | (object & { length?: never; });
 
+const levelFuncs = {
+	error: 'error',
+	warning: 'warn',
+	success: 'info',
+	info: 'log',
+	debug: 'debug',
+} as const satisfies Record<Level, keyof typeof console>;
+
 // eslint-disable-next-line import/no-default-export
 export default class Logger {
 	private context: Context;
@@ -103,20 +111,7 @@ export default class Logger {
 		} else if (data != null) {
 			args.push(data);
 		}
-
-		try {
-			const configuredLogLevel: Level = this.config.logLevel as Level;
-			if (this.logLevelPriority[configuredLogLevel] < this.logLevelPriority[level]) {
-				return;
-			}
-		} catch (e) {
-			const configuredLogLevel: Level = 'warning' as Level;
-			if (this.logLevelPriority[configuredLogLevel] < this.logLevelPriority[level]) {
-				return;
-			}
-		}
-
-		console.log(...args);
+		console[levelFuncs[level]](...args);
 	}
 
 	@bindThis

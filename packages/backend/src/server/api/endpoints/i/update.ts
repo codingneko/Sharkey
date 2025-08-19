@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import * as mfm from '@transfem-org/sfm-js';
+import * as mfm from 'mfm-js';
 import { Inject, Injectable } from '@nestjs/common';
 import ms from 'ms';
 import { extractCustomEmojisFromMfm } from '@/misc/extract-custom-emojis-from-mfm.js';
@@ -34,6 +34,7 @@ import { verifyFieldLinks } from '@/misc/verify-field-link.js';
 import { AvatarDecorationService } from '@/core/AvatarDecorationService.js';
 import { notificationRecieveConfig } from '@/models/json-schema/user.js';
 import { userUnsignedFetchOptions } from '@/const.js';
+import { renderInlineError } from '@/misc/render-inline-error.js';
 import { ApiLoggerService } from '../../ApiLoggerService.js';
 import { ApiError } from '../../error.js';
 
@@ -270,7 +271,7 @@ export const paramDef = {
 				minLength: 1,
 				maxLength: 128,
 			},
-			maxLength: 32,
+			maxItems: 32,
 		},
 	},
 } as const;
@@ -516,7 +517,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 					// Retrieve the old account
 					const knownAs = await this.remoteUserResolveService.resolveUser(username, host).catch((e) => {
-						this.apiLoggerService.logger.warn(`failed to resolve dstination user: ${e}`);
+						this.apiLoggerService.logger.warn(`failed to resolve destination user: ${renderInlineError(e)}`);
 						throw new ApiError(meta.errors.noSuchUser);
 					});
 					if (knownAs.id === _user.id) throw new ApiError(meta.errors.forbiddenToSetYourself);
@@ -602,11 +603,15 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				this.globalEventService.publishInternalEvent('localUserUpdated', { id: user.id });
 			}
 
-			const verified_links = await verifyFieldLinks(newFields, `${this.config.url}/@${user.username}`, this.httpRequestService);
+			const profileUrls = [
+				this.userEntityService.genLocalUserUri(user.id),
+				`${this.config.url}/@${user.username}`,
+			];
+			const verifiedLinks = await verifyFieldLinks(newFields, profileUrls, this.httpRequestService);
 
 			await this.userProfilesRepository.update(user.id, {
 				...profileUpdates,
-				verifiedLinks: verified_links,
+				verifiedLinks,
 			});
 
 			const iObj = await this.userEntityService.pack(user.id, user, {
@@ -616,7 +621,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 			const updatedProfile = await this.userProfilesRepository.findOneByOrFail({ userId: user.id });
 
-			this.cacheService.userProfileCache.set(user.id, updatedProfile);
+			await this.cacheService.userProfileCache.set(user.id, updatedProfile);
 
 			// Publish meUpdated event
 			this.globalEventService.publishMainStream(user.id, 'meUpdated', iObj);

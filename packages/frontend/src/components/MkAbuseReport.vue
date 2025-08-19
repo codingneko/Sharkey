@@ -99,7 +99,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 <script lang="ts" setup>
 import { computed, provide, ref, watch } from 'vue';
 import * as Misskey from 'misskey-js';
-import * as mfm from '@transfem-org/sfm-js';
+import * as mfm from 'mfm-js';
 import MkButton from '@/components/MkButton.vue';
 import MkSwitch from '@/components/MkSwitch.vue';
 import MkKeyValue from '@/components/MkKeyValue.vue';
@@ -118,9 +118,12 @@ import { misskeyApi } from '@/utility/misskey-api';
 import AdminUser from '@/pages/admin-user.vue';
 import SkUrlPreviewGroup from '@/components/SkUrlPreviewGroup.vue';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
 	report: Misskey.entities.AdminAbuseUserReportsResponse[number];
-}>();
+	metaHint?: Misskey.entities.AdminMetaResponse | undefined;
+}>(), {
+	metaHint: undefined,
+});
 
 const emit = defineEmits<{
 	(ev: 'resolved', reportId: string): void;
@@ -134,19 +137,12 @@ reporterRouter.init();
 */
 
 const parsedComment = computed(() => mfm.parse(props.report.comment));
-const metaHint = ref<Misskey.entities.AdminMetaResponse | undefined>(undefined);
 
 const targetInstanceIcon = computed(() => props.report.targetInstance?.faviconUrl
 	? getProxiedImageUrlNullable(props.report.targetInstance.faviconUrl, 'preview')
 	: props.report.targetInstance?.iconUrl
 		? getProxiedImageUrlNullable(props.report.targetInstance.iconUrl, 'preview')
 		: null);
-
-if (iAmAdmin) {
-	misskeyApi('admin/meta')
-		.then(meta => metaHint.value = meta)
-		.catch(err => console.error('[MkAbuseReport] Error fetching meta:', err));
-}
 
 const moderationNote = ref(props.report.moderationNote ?? '');
 

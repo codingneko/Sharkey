@@ -4246,6 +4246,10 @@ export type components = {
       /** Format: url */
       avatarUrl: string | null;
       avatarBlurhash: string | null;
+      /** @example Hi masters, I am Ai! */
+      description: string | null;
+      /** Format: date-time */
+      createdAt: string;
       avatarDecorations: {
           /** Format: id */
           id: string;
@@ -4304,8 +4308,6 @@ export type components = {
       movedTo: string | null;
       alsoKnownAs: string[] | null;
       /** Format: date-time */
-      createdAt: string;
-      /** Format: date-time */
       updatedAt: string | null;
       /** Format: date-time */
       lastFetchedAt: string | null;
@@ -4319,8 +4321,6 @@ export type components = {
       isSilenced: boolean;
       /** @example false */
       isSuspended: boolean;
-      /** @example Hi masters, I am Ai! */
-      description: string | null;
       location: string | null;
       /** @example 2018-03-12 */
       birthday: string | null;
@@ -11236,6 +11236,7 @@ export type operations = {
               remoteFollowing: number;
               remoteFollowers: number;
             };
+            signupReason: string | null;
           };
         };
       };
@@ -12922,7 +12923,11 @@ export type operations = {
     requestBody: {
       content: {
         'application/json': {
-          uri: string;
+          uri?: string | null;
+          /** Format: misskey:id */
+          userId?: string | null;
+          /** Format: misskey:id */
+          noteId?: string | null;
           expandCollectionItems?: boolean;
           expandCollectionLimit?: number | null;
           allowAnonymous?: boolean;
@@ -19577,18 +19582,10 @@ export type operations = {
       200: {
         content: {
           'application/json': {
-            image?: {
-              link?: string;
-              url: string;
-              title?: string;
-            };
-            paginationLinks?: {
-              self?: string;
-              first?: string;
-              next?: string;
-              last?: string;
-              prev?: string;
-            };
+            type: string;
+            id?: string;
+            updated?: string;
+            author?: string;
             link?: string;
             title?: string;
             items: {
@@ -19596,33 +19593,15 @@ export type operations = {
                 guid?: string;
                 title?: string;
                 pubDate?: string;
-                creator?: string;
-                summary?: string;
-                content?: string;
-                isoDate?: string;
-                categories?: string[];
-                contentSnippet?: string;
-                enclosure?: {
-                  url: string;
-                  length?: number;
-                  type?: string;
-                };
+                description?: string;
+                media: {
+                    medium?: string;
+                    url?: string;
+                    type?: string;
+                    lang?: string;
+                  }[];
               }[];
-            feedUrl?: string;
             description?: string;
-            itunes?: {
-              image?: string;
-              owner?: {
-                name?: string;
-                email?: string;
-              };
-              author?: string;
-              summary?: string;
-              explicit?: string;
-              categories?: string[];
-              keywords?: string[];
-              [key: string]: unknown;
-            };
           };
         };
       };
@@ -24263,7 +24242,7 @@ export type operations = {
       /** @description OK (with results) */
       200: {
         content: {
-          'application/json': Record<string, never>;
+          'application/json': unknown;
         };
       };
       /** @description Client error */

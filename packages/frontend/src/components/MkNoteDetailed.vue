@@ -89,21 +89,21 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</p>
 			<div v-show="mergedCW == null || showContent">
 				<span v-if="appearNote.isHidden" style="opacity: 0.5">({{ i18n.ts.private }})</span>
-				<MkA v-if="appearNote.replyId" :class="$style.noteReplyTarget" :to="`/notes/${appearNote.replyId}`"><i class="ph-arrow-bend-left-up ph-bold ph-lg"></i></MkA>
-				<Mfm
-					v-if="appearNote.text"
-					:parsedNodes="parsed"
-					:text="appearNote.text"
-					:author="appearNote.user"
-					:nyaize="'respect'"
-					:emojiUrls="appearNote.emojis"
-					:enableEmojiMenu="true"
-					:enableEmojiMenuReaction="true"
-					:isAnim="allowAnim"
-					:isBlock="true"
-					class="_selectable"
-				/>
-				<a v-if="appearNote.renote != null" :class="$style.rn">RN:</a>
+				<div>
+					<MkA v-if="appearNote.replyId" :class="$style.noteReplyTarget" :to="`/notes/${appearNote.replyId}`"><i class="ph-arrow-bend-left-up ph-bold ph-lg"></i></MkA>
+					<Mfm
+						v-if="appearNote.text"
+						:parsedNodes="parsed"
+						:text="appearNote.text"
+						:author="appearNote.user"
+						:nyaize="'respect'"
+						:emojiUrls="appearNote.emojis"
+						:enableEmojiMenu="true"
+						:enableEmojiMenuReaction="true"
+						:isAnim="allowAnim"
+						class="_selectable"
+					/>
+				</div>
 				<SkNoteTranslation :note="note" :translation="translation" :translating="translating"></SkNoteTranslation>
 				<MkButton v-if="!allowAnim && animated" :class="$style.playMFMButton" :small="true" @click="animatedMFM()" @click.stop><i class="ph-play ph-bold ph-lg "></i> {{ i18n.ts._animatedMFM.play }}</MkButton>
 				<MkButton v-else-if="!prefer.s.animatedMfm && allowAnim && animated" :class="$style.playMFMButton" :small="true" @click="animatedMFM()" @click.stop><i class="ph-stop ph-bold ph-lg "></i> {{ i18n.ts._animatedMFM.stop }}</MkButton>
@@ -112,7 +112,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 				</div>
 				<MkPoll v-if="appearNote.poll" ref="pollViewer" :noteId="appearNote.id" :poll="appearNote.poll" :local="!appearNote.user.host" :class="$style.poll" :author="appearNote.user" :emojiUrls="appearNote.emojis"/>
 				<div v-if="isEnabledUrlPreview">
-					<MkUrlPreview v-for="url in urls" :key="url" :url="url" :compact="true" :detail="true" :showAsQuote="!appearNote.user.rejectQuotes" :skipNoteIds="selfNoteIds" style="margin-top: 6px;"/>
+					<SkUrlPreviewGroup :sourceNodes="nodes" :sourceNote="appearNote" :compact="true" :detail="true" :showAsQuote="!appearNote.user.rejectQuotes" :skipNoteIds="selfNoteIds" style="margin-top: 6px;" @click.stop/>
 				</div>
 				<div v-if="appearNote.renote" :class="$style.quote"><MkNoteSimple :note="appearNote.renote" :class="$style.quoteNote" :expandAllCws="props.expandAllCws"/></div>
 			</div>
@@ -233,7 +233,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 <script lang="ts" setup>
 import { computed, inject, onMounted, provide, ref, useTemplateRef, watch } from 'vue';
-import * as mfm from '@transfem-org/sfm-js';
+import * as mfm from 'mfm-js';
 import * as Misskey from 'misskey-js';
 import { isLink } from '@@/js/is-link.js';
 import * as config from '@@/js/config.js';
@@ -286,7 +286,7 @@ import { DI } from '@/di.js';
 import SkMutedNote from '@/components/SkMutedNote.vue';
 import SkNoteTranslation from '@/components/SkNoteTranslation.vue';
 import { getSelfNoteIds } from '@/utility/get-self-note-ids.js';
-import { extractPreviewUrls } from '@/utility/extract-preview-urls.js';
+import SkUrlPreviewGroup from '@/components/SkUrlPreviewGroup.vue';
 
 const props = withDefaults(defineProps<{
 	note: Misskey.entities.Note;
@@ -339,8 +339,7 @@ const isDeleted = ref(false);
 const renoted = ref(false);
 const translation = ref<Misskey.entities.NotesTranslateResponse | false | null>(null);
 const translating = ref(false);
-const parsed = computed(() => appearNote.value.text ? mfm.parse(appearNote.value.text) : null);
-const urls = computed(() => parsed.value ? extractPreviewUrls(props.note, parsed.value) : null);
+const parsed = computed(() => appearNote.value.text ? mfm.parse(appearNote.value.text) : []);
 const selfNoteIds = computed(() => getSelfNoteIds(props.note));
 const animated = computed(() => parsed.value ? checkAnimationFromMfm(parsed.value) : null);
 const allowAnim = ref(prefer.s.advancedMfm && prefer.s.animatedMfm);
@@ -414,6 +413,11 @@ provide(DI.mfmEmojiReactCallback, (reaction) => {
 
 const tab = ref(props.initialTab);
 const reactionTabType = ref<string | null>(null);
+
+// Auto-select the first page of reactions
+watch(appearNote, n => {
+	reactionTabType.value ??= Object.keys(n.reactions)[0] ?? null;
+}, { immediate: true });
 
 const renotesPagination = computed<Paging>(() => ({
 	endpoint: 'notes/renotes',
