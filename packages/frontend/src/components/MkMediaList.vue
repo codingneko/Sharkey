@@ -35,6 +35,7 @@ import * as Misskey from 'misskey-js';
 import PhotoSwipeLightbox from 'photoswipe/lightbox';
 import PhotoSwipe from 'photoswipe';
 import 'photoswipe/style.css';
+import '@photo-sphere-viewer/core/index.css';
 import { FILE_TYPE_BROWSERSAFE, FILE_EXT_TRACKER_MODULES, FILE_TYPE_TRACKER_MODULES, FILE_TYPE_FLASH_CONTENT, FILE_EXT_FLASH_CONTENT } from '@@/js/const.js';
 import XBanner from '@/components/MkMediaBanner.vue';
 import XImage from '@/components/MkMediaImage.vue';
@@ -107,6 +108,79 @@ const isFlash = (file: Misskey.entities.DriveFile): boolean => {
 	});
 };
 
+const is360Image = (file: Misskey.entities.DriveFile): boolean => {
+	// First, look for hints in filename/comment
+	const text = `${file.name} ${file.comment ?? ''}`.toLowerCase();
+	const has360Keyword = Boolean(text.match(/\b(360|pano|panorama|equirect|equirectangular)\b/));
+
+	let w = Number(file.properties.width);
+	let h = Number(file.properties.height);
+	if (!w || !h) return false;
+
+	// Account for EXIF orientation (same logic as PhotoSwipe)
+	if (file.properties.orientation != null && file.properties.orientation >= 5) {
+		[w, h] = [h, w];
+	}
+
+	// Avoid mistakenly treating portrait photos as panoramas.
+	if (w < h) return false;
+
+	// Equirectangular panoramas are typically close to 2:1 aspect ratio
+	const ratio = w / h;
+	const isLikelyPanorama = w >= 1000 && ratio >= 1.8 && ratio <= 2.5;
+
+	// Use keyword hints only if the dimensions also look like a panorama.
+	return isLikelyPanorama && (has360Keyword || ratio >= 1.95);
+};
+
+let viewerOverlay: HTMLElement | null = null;
+let viewer: any | null = null;
+
+const close360Viewer = () => {
+	if (viewer) {
+		try {
+			viewer.destroy();
+		} catch (_err) {
+			// ignore
+		}
+		viewer = null;
+	}
+	if (viewerOverlay) {
+		viewerOverlay.remove();
+		viewerOverlay = null;
+	}
+};
+
+const open360Viewer = async (src: string) => {
+	if (!src || viewerOverlay) return;
+	const { Viewer } = await import('@photo-sphere-viewer/core');
+
+	viewerOverlay = window.document.createElement('div');
+	viewerOverlay.className = 'mk-360-viewer-overlay';
+	viewerOverlay.innerHTML = `
+		<div class="mk-360-viewer-container"></div>
+		<button class="mk-360-viewer-close" type="button" aria-label="Close 360 viewer">×</button>
+	`;
+	window.document.body.appendChild(viewerOverlay);
+
+	const container = viewerOverlay.querySelector<HTMLDivElement>('.mk-360-viewer-container');
+	const closeBtn = viewerOverlay.querySelector<HTMLButtonElement>('.mk-360-viewer-close');
+
+	const close = () => close360Viewer();
+	viewerOverlay.addEventListener('click', (e) => {
+		if (e.target === viewerOverlay) close();
+	});
+	closeBtn?.addEventListener('click', close);
+
+	viewer = new Viewer({
+		container: container ?? window.document.createElement('div'),
+		panorama: src,
+		navbar: false,
+		defaultLong: 0,
+		mousewheel: false,
+	});
+};
+
 onMounted(() => {
 	calcAspectRatio();
 
@@ -172,6 +246,7 @@ onMounted(() => {
 		itemData.alt = file.comment ?? undefined;
 		itemData.comment = file.comment;
 		itemData.thumbCropped = true;
+		itemData.is360 = is360Image(file);
 
 		return itemData;
 	});
@@ -203,6 +278,50 @@ onMounted(() => {
 				stopEvent('pointercancel');
 			},
 		});
+
+		lightbox?.pswp?.ui?.registerElement({
+			name: 'view360',
+			className: 'pswp__view360-button',
+			appendTo: 'bar',
+			order: 9,
+			isButton: true,
+			html: '360°',
+			onInit: (el, pswp) => {
+				el.setAttribute('aria-label', 'View as 360° Image');
+
+				// Start hidden until we know this is a 360° image.
+				const htmlEl = el as HTMLElement;
+				htmlEl.style.display = 'none';
+
+				const getCurrentFile = () => {
+					const src = pswp.currSlide?.data.src;
+					if (!src) return null;
+					return props.mediaList.find((m) => m.url === src || m.thumbnailUrl === src || (m.url && src.startsWith(m.url)));
+				};
+
+				const updateVisible = () => {
+					const is360 = pswp.currSlide?.data.is360;
+					if (is360) {
+						htmlEl.style.display = 'flex';
+					} else {
+						htmlEl.style.display = 'none';
+					}
+				};
+
+				pswp.on('change', updateVisible);
+				pswp.on('afterInit', updateVisible);
+				updateVisible();
+
+				el.addEventListener('click', (ev) => {
+					ev.stopPropagation();
+					const file = getCurrentFile();
+					const src = file ? file.url : pswp.currSlide?.data.src;
+					if (typeof src === 'string' && file && is360Image(file)) {
+						open360Viewer(src);
+					}
+				});
+			},
+		});
 	});
 
 	lightbox.on('afterInit', () => {
@@ -215,6 +334,7 @@ onMounted(() => {
 	});
 
 	lightbox.on('destroy', () => {
+		close360Viewer();
 		focusParent(activeEl, true, false);
 		activeEl = null;
 		if (window.location.hash === '#pswp') {
@@ -229,6 +349,7 @@ onMounted(() => {
 
 onUnmounted(() => {
 	window.removeEventListener('popstate', popstateHandler);
+	close360Viewer();
 	lightbox?.destroy();
 	lightbox = null;
 	activeEl = null;
@@ -377,5 +498,58 @@ defineExpose({
 	overflow-y: auto;
 	text-shadow: var(--MI_THEME-bg) 0 0 10px, var(--MI_THEME-bg) 0 0 3px, var(--MI_THEME-bg) 0 0 3px;
 	white-space: pre-line;
+}
+
+.pswp__view360-button {
+	display: flex;
+	justify-content: center;
+	align-self: center;
+	width: 38px;
+	height: 38px;
+	border: none;
+	color: #fff;
+	font-weight: 700;
+	font-size: 12px;
+	cursor: pointer;
+	padding: 11px 0 0 !important;
+	line-height: 38px;
+	margin: 0px;
+	box-shadow: 0 0 0 1px rgba(255,255,255,0.14);
+}
+
+.mk-360-viewer-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 2147483647;
+	background: rgba(0, 0, 0, 0.9);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 40px;
+}
+
+.mk-360-viewer-container {
+	width: 100%;
+	height: 100%;
+	max-width: calc(100vw - 80px);
+	max-height: calc(100vh - 80px);
+	border-radius: 12px;
+	overflow: hidden;
+	position: relative;
+}
+
+.mk-360-viewer-close {
+	position: absolute;
+	top: 12px;
+	right: 12px;
+	width: 36px;
+	height: 36px;
+	border-radius: 999px;
+	border: none;
+	background: rgba(0, 0, 0, 0.8);
+	color: #fff;
+	font-size: 20px;
+	line-height: 1;
+	cursor: pointer;
 }
 </style>
