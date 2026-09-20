@@ -3,111 +3,95 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, type OnModuleInit, type OnApplicationShutdown } from '@nestjs/common';
 import * as Redis from 'ioredis';
 import { In } from 'typeorm';
 import { FanoutTimelineService } from '@/core/FanoutTimelineService.js';
-import type { GlobalEvents } from '@/core/GlobalEventService.js';
 import { GlobalEventService } from '@/core/GlobalEventService.js';
 import { UtilityService } from '@/core/UtilityService.js';
 import { bindThis } from '@/decorators.js';
+import { promiseMap } from '@/misc/promise-map.js';
 import { DI } from '@/di-symbols.js';
 import * as Acct from '@/misc/acct.js';
 import type { Packed } from '@/misc/json-schema.js';
-import type { AntennasRepository, UserListMembershipsRepository } from '@/models/_.js';
+import type { AntennasRepository } from '@/models/_.js';
 import type { MiAntenna } from '@/models/Antenna.js';
 import type { MiNote } from '@/models/Note.js';
 import type { MiUser } from '@/models/User.js';
+import { InternalEventService, type InternalEventTypes } from '@/global/InternalEventService.js';
 import { CacheService } from './CacheService.js';
-import type { OnApplicationShutdown } from '@nestjs/common';
 
 @Injectable()
-export class AntennaService implements OnApplicationShutdown {
-	private antennasFetched: boolean;
-	private antennas: MiAntenna[];
+export class AntennaService implements OnModuleInit, OnApplicationShutdown {
+	// TODO implement QuantumSingleCache then replace this
+	// TODO or implement QuantumKVCache.populate() and allow infinite lifetimes?
+	private antennasFetched = false;
+	private antennas = new Map<string, MiAntenna>();
 
 	constructor(
 		@Inject(DI.redisForTimelines)
 		private redisForTimelines: Redis.Redis,
 
-		@Inject(DI.redisForSub)
-		private redisForSub: Redis.Redis,
-
 		@Inject(DI.antennasRepository)
 		private antennasRepository: AntennasRepository,
-
-		@Inject(DI.userListMembershipsRepository)
-		private userListMembershipsRepository: UserListMembershipsRepository,
 
 		private cacheService: CacheService,
 		private utilityService: UtilityService,
 		private globalEventService: GlobalEventService,
 		private fanoutTimelineService: FanoutTimelineService,
-	) {
-		this.antennasFetched = false;
-		this.antennas = [];
-
-		this.redisForSub.on('message', this.onRedisMessage);
-	}
+		private readonly internalEventService: InternalEventService,
+	) {}
 
 	@bindThis
-	private async onRedisMessage(_: string, data: string): Promise<void> {
-		const obj = JSON.parse(data);
-
-		if (obj.channel === 'internal') {
-			const { type, body } = obj.message as GlobalEvents['internal']['payload'];
-			switch (type) {
-				case 'antennaCreated':
-					this.antennas.push({ // TODO: このあたりのデシリアライズ処理は各modelファイル内に関数としてexportしたい
+	private async onAntennaEvent<E extends 'antennaCreated' | 'antennaUpdated' | 'antennaDeleted'>(body: InternalEventTypes[E], type: E): Promise<void> {
+		{
+			{
+				if (type !== 'antennaDeleted') {
+					this.antennas.set(body.id, { // TODO: このあたりのデシリアライズ処理は各modelファイル内に関数としてexportしたい
 						...body,
 						lastUsedAt: new Date(body.lastUsedAt),
 						user: null, // joinなカラムは通常取ってこないので
 						userList: null, // joinなカラムは通常取ってこないので
 					});
-					break;
-				case 'antennaUpdated': {
-					const idx = this.antennas.findIndex(a => a.id === body.id);
-					if (idx >= 0) {
-						this.antennas[idx] = { // TODO: このあたりのデシリアライズ処理は各modelファイル内に関数としてexportしたい
-							...body,
-							lastUsedAt: new Date(body.lastUsedAt),
-							user: null, // joinなカラムは通常取ってこないので
-							userList: null, // joinなカラムは通常取ってこないので
-						};
-					} else {
-						// サーバ起動時にactiveじゃなかった場合、リストに持っていないので追加する必要あり
-						this.antennas.push({ // TODO: このあたりのデシリアライズ処理は各modelファイル内に関数としてexportしたい
-							...body,
-							lastUsedAt: new Date(body.lastUsedAt),
-							user: null, // joinなカラムは通常取ってこないので
-							userList: null, // joinなカラムは通常取ってこないので
-						});
-					}
+				} else {
+					this.antennas.delete(body.id);
 				}
-					break;
-				case 'antennaDeleted':
-					this.antennas = this.antennas.filter(a => a.id !== body.id);
-					break;
-				default:
-					break;
 			}
+		}
+	}
+
+	@bindThis
+	public async updateAntenna(id: string, data: Partial<MiAntenna>) {
+		await this.antennasRepository.update({ id }, data);
+		await this.refreshAntenna(id);
+	}
+
+	@bindThis
+	public async refreshAntenna(id: string): Promise<void> {
+		const antenna = await this.antennasRepository.findOneBy({ id });
+		if (antenna) {
+			// This will be handled above to cache result
+			await this.internalEventService.emit('antennaUpdated', antenna);
 		}
 	}
 
 	@bindThis
 	public async addNoteToAntennas(note: MiNote, noteUser: { id: MiUser['id']; username: string; host: string | null; isBot: boolean; }): Promise<void> {
 		const antennas = await this.getAntennas();
-		const antennasWithMatchResult = await Promise.all(antennas.map(antenna => this.checkHitAntenna(antenna, note, noteUser).then(hit => [antenna, hit] as const)));
+		const antennasWithMatchResult = await promiseMap(antennas, async antenna => {
+			const hit = await this.checkHitAntenna(antenna, note, noteUser);
+			return [antenna, hit] as const;
+		});
 		const matchedAntennas = antennasWithMatchResult.filter(([, hit]) => hit).map(([antenna]) => antenna);
 
 		const redisPipeline = this.redisForTimelines.pipeline();
 
 		for (const antenna of matchedAntennas) {
-			this.fanoutTimelineService.push(`antennaTimeline:${antenna.id}`, note.id, 200, redisPipeline);
-			this.globalEventService.publishAntennaStream(antenna.id, 'note', note);
+			await this.fanoutTimelineService.push(`antennaTimeline:${antenna.id}`, note.id, 200, redisPipeline);
+			await this.globalEventService.publishAntennaStream(antenna.id, 'note', note);
 		}
 
-		redisPipeline.exec();
+		await redisPipeline.exec();
 	}
 
 	// NOTE: フォローしているユーザーのノート、リストのユーザーのノート、グループのユーザーのノート指定はパフォーマンス上の理由で無効になっている
@@ -130,8 +114,7 @@ export class AntennaService implements OnApplicationShutdown {
 		}
 
 		if (note.visibility === 'followers') {
-			const followings = await this.cacheService.userFollowingsCache.fetch(antenna.userId);
-			const isFollowing = followings.has(note.userId);
+			const isFollowing = await this.cacheService.isFollowing(antenna.userId, note.userId);
 			if (!isFollowing && antenna.userId !== note.userId) return false;
 		}
 
@@ -139,12 +122,8 @@ export class AntennaService implements OnApplicationShutdown {
 			// TODO
 		} else if (antenna.src === 'list') {
 			if (antenna.userListId == null) return false;
-			const exists = await this.userListMembershipsRepository.exists({
-				where: {
-					userListId: antenna.userListId,
-					userId: note.userId,
-				},
-			});
+			const memberships = await this.cacheService.userListMembershipsCache.fetch(note.userId);
+			const exists = memberships.has(antenna.userListId);
 			if (!exists) return false;
 		} else if (antenna.src === 'users') {
 			const accts = antenna.users.map(x => {
@@ -216,13 +195,14 @@ export class AntennaService implements OnApplicationShutdown {
 	@bindThis
 	public async getAntennas() {
 		if (!this.antennasFetched) {
-			this.antennas = await this.antennasRepository.findBy({
+			const allAntennas = await this.antennasRepository.findBy({
 				isActive: true,
 			});
+			this.antennas = new Map(allAntennas.map(a => [a.id, a]));
 			this.antennasFetched = true;
 		}
 
-		return this.antennas;
+		return Array.from(this.antennas.values());
 	}
 
 	@bindThis
@@ -256,17 +236,21 @@ export class AntennaService implements OnApplicationShutdown {
 
 		// announce update to event
 		for (const newAntenna of await this.antennasRepository.findBy({ id: In(antennaIds) })) {
-			this.globalEventService.publishInternalEvent('antennaUpdated', newAntenna);
+			await this.internalEventService.emit('antennaUpdated', newAntenna);
 		}
 	}
 
 	@bindThis
-	public dispose(): void {
-		this.redisForSub.off('message', this.onRedisMessage);
+	public onModuleInit(): void {
+		this.internalEventService.on('antennaCreated', this.onAntennaEvent);
+		this.internalEventService.on('antennaUpdated', this.onAntennaEvent);
+		this.internalEventService.on('antennaUpdated', this.onAntennaEvent);
 	}
 
 	@bindThis
-	public onApplicationShutdown(signal?: string | undefined): void {
-		this.dispose();
+	public onApplicationShutdown(): void {
+		this.internalEventService.off('antennaCreated', this.onAntennaEvent);
+		this.internalEventService.off('antennaUpdated', this.onAntennaEvent);
+		this.internalEventService.off('antennaUpdated', this.onAntennaEvent);
 	}
 }

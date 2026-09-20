@@ -11,6 +11,7 @@ import { DI } from '@/di-symbols.js';
 import { DEFAULT_POLICIES } from '@/core/RoleService.js';
 import { instanceUnsignedFetchOptions } from '@/const.js';
 import { SystemAccountService } from '@/core/SystemAccountService.js';
+import { MiMeta } from '@/models/Meta.js';
 
 export const meta = {
 	tags: ['meta'],
@@ -473,6 +474,10 @@ export const meta = {
 				type: 'string',
 				optional: false, nullable: true,
 			},
+			listenbrainzAuthKey: {
+				type: 'string',
+				optional: false, nullable: true,
+			},
 			defaultDarkTheme: {
 				type: 'string',
 				optional: false, nullable: true,
@@ -486,6 +491,10 @@ export const meta = {
 				optional: false, nullable: false,
 			},
 			description: {
+				type: 'string',
+				optional: false, nullable: true,
+			},
+			about: {
 				type: 'string',
 				optional: false, nullable: true,
 			},
@@ -613,6 +622,24 @@ export const meta = {
 				type: 'boolean',
 				optional: false, nullable: false,
 			},
+			deliverSuspendedSoftware: {
+				type: 'array',
+				optional: false, nullable: false,
+				items: {
+					type: 'object',
+					optional: false, nullable: false,
+					properties: {
+						software: {
+							type: 'string',
+							optional: false, nullable: false,
+						},
+						versionRange: {
+							type: 'string',
+							optional: false, nullable: false,
+						},
+					},
+				},
+			},
 		},
 	},
 } as const;
@@ -627,6 +654,9 @@ export const paramDef = {
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
+		@Inject(DI.meta)
+		private readonly serverSettings: MiMeta,
+
 		@Inject(DI.config)
 		private config: Config,
 
@@ -634,7 +664,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private systemAccountService: SystemAccountService,
 	) {
 		super(meta, paramDef, async () => {
-			const instance = await this.metaService.fetch(true);
+			const instance = this.serverSettings;
 
 			const proxy = await this.systemAccountService.fetch('proxy');
 
@@ -646,6 +676,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				shortName: instance.shortName,
 				uri: this.config.url,
 				description: instance.description,
+				about: instance.about,
 				langs: instance.langs,
 				tosUrl: instance.termsOfServiceUrl,
 				repositoryUrl: instance.repositoryUrl,
@@ -738,6 +769,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				deeplFreeInstance: instance.deeplFreeInstance,
 				libreTranslateURL: instance.libreTranslateURL,
 				libreTranslateKey: instance.libreTranslateKey,
+				listenbrainzAuthKey: instance.listenbrainzAuthKey,
 				enableIpLogging: instance.enableIpLogging,
 				enableActiveEmailValidation: instance.enableActiveEmailValidation,
 				enableVerifymailApi: instance.enableVerifymailApi,
@@ -776,6 +808,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				hasLegacyAuthFetchSetting: config.checkActivityPubGetSignature != null,
 				allowUnsignedFetch: instance.allowUnsignedFetch,
 				enableProxyAccount: instance.enableProxyAccount,
+				deliverSuspendedSoftware: instance.deliverSuspendedSoftware,
 			};
 		});
 	}

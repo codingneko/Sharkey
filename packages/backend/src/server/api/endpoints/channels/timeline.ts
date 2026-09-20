@@ -12,9 +12,9 @@ import ActiveUsersChart from '@/core/chart/charts/active-users.js';
 import { DI } from '@/di-symbols.js';
 import { IdService } from '@/core/IdService.js';
 import { FanoutTimelineEndpointService } from '@/core/FanoutTimelineEndpointService.js';
+import { UserService } from '@/core/UserService.js';
 import { MiLocalUser } from '@/models/User.js';
 import { ApiError } from '../../error.js';
-import { Brackets } from 'typeorm';
 
 export const meta = {
 	tags: ['notes', 'channels'],
@@ -83,6 +83,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private queryService: QueryService,
 		private fanoutTimelineEndpointService: FanoutTimelineEndpointService,
 		private activeUsersChart: ActiveUsersChart,
+		private readonly userService: UserService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			const untilId = ps.untilId ?? (ps.untilDate ? this.idService.gen(ps.untilDate!) : null);
@@ -97,9 +98,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			}
 
 			if (me) {
-				process.nextTick(() => {
-					this.activeUsersChart.read(me);
-				});
+				this.userService.markUserActive(me);
 			}
 
 			if (!this.serverSettings.enableFanoutTimeline) {
@@ -144,10 +143,12 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 		this.queryService.generateVisibilityQuery(query, me);
 		this.queryService.generateBlockedHostQueryForNote(query);
+		this.queryService.generateSuspendedUserQueryForNote(query);
 		this.queryService.generateSilencedUserQueryForNotes(query, me);
 		if (me) {
 			this.queryService.generateMutedUserQueryForNotes(query, me);
 			this.queryService.generateBlockedUserQueryForNotes(query, me);
+			this.queryService.generateMutedNoteThreadQuery(query, me);
 		}
 
 		if (ps.withFiles) {

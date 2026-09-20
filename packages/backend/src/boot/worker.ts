@@ -4,14 +4,16 @@
  */
 
 import cluster from 'node:cluster';
-import * as Sentry from '@sentry/node';
-import { nodeProfilingIntegration } from '@sentry/profiling-node';
-import { envOption } from '@/env.js';
-import { loadConfig } from '@/config.js';
-import { jobQueue, server } from './common.js';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import * as fs from 'node:fs';
+import * as Sentry from '@sentry/node';
+import { nodeProfilingIntegration } from '@sentry/profiling-node';
+import { loadConfig } from '@/config.js';
+import { jobQueue, server } from '@/boot/common.js';
+import { coreEnvService, coreLogger } from '@/boot/coreLogger.js';
+import type { Logger } from '@/logger.js';
+
 const _filename = fileURLToPath(import.meta.url);
 const _dirname = dirname(_filename);
 const meta = JSON.parse(fs.readFileSync(`${_dirname}/../../../../built/meta.json`, 'utf-8'));
@@ -19,8 +21,11 @@ const meta = JSON.parse(fs.readFileSync(`${_dirname}/../../../../built/meta.json
 /**
  * Init worker process
  */
-export async function workerMain() {
-	const config = loadConfig();
+export async function workerMain(bootLogger?: Logger) {
+	bootLogger ??= coreLogger.createSubLogger('boot', 'magenta');
+
+	const config = loadConfig(bootLogger);
+	const envOption = coreEnvService.options;
 
 	if (config.sentryForBackend) {
 		Sentry.init({
@@ -37,7 +42,7 @@ export async function workerMain() {
 			maxBreadcrumbs: 0,
 
 			// Set release version
-			release: "Sharkey@" + meta.version,
+			release: 'Sharkey@' + (meta.gitVersion ?? meta.version),
 
 			...config.sentryForBackend.options,
 		});

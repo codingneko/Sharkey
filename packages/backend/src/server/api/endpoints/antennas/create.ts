@@ -6,11 +6,13 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { IdService } from '@/core/IdService.js';
-import type { UserListsRepository, AntennasRepository } from '@/models/_.js';
-import { GlobalEventService } from '@/core/GlobalEventService.js';
+import type { AntennasRepository } from '@/models/_.js';
 import { AntennaEntityService } from '@/core/entities/AntennaEntityService.js';
+import { InternalEventService } from '@/global/InternalEventService.js';
+import { UserListService } from '@/core/UserListService.js';
 import { DI } from '@/di-symbols.js';
 import { RoleService } from '@/core/RoleService.js';
+import { TimeService } from '@/global/TimeService.js';
 import { ApiError } from '../../error.js';
 
 export const meta = {
@@ -90,13 +92,12 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		@Inject(DI.antennasRepository)
 		private antennasRepository: AntennasRepository,
 
-		@Inject(DI.userListsRepository)
-		private userListsRepository: UserListsRepository,
-
 		private antennaEntityService: AntennaEntityService,
 		private roleService: RoleService,
 		private idService: IdService,
-		private globalEventService: GlobalEventService,
+		private readonly timeService: TimeService,
+		private readonly userListService: UserListService,
+		private readonly internalEventService: InternalEventService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			if (ps.keywords.flat().every(x => x === '') && ps.excludeKeywords.flat().every(x => x === '')) {
@@ -113,17 +114,18 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			let userList;
 
 			if (ps.src === 'list' && ps.userListId) {
-				userList = await this.userListsRepository.findOneBy({
-					id: ps.userListId,
-					userId: me.id,
-				});
+				userList = await this.userListService.userListsCache.fetchMaybe(ps.userListId);
 
 				if (userList == null) {
 					throw new ApiError(meta.errors.noSuchUserList);
 				}
+
+				if (!userList.isPublic && userList.userId !== me.id) {
+					throw new ApiError(meta.errors.noSuchUserList);
+				}
 			}
 
-			const now = new Date();
+			const now = this.timeService.date;
 
 			const antenna = await this.antennasRepository.insertOne({
 				id: this.idService.gen(now.getTime()),
@@ -143,7 +145,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				excludeNotesInSensitiveChannel: ps.excludeNotesInSensitiveChannel,
 			});
 
-			this.globalEventService.publishInternalEvent('antennaCreated', antenna);
+			await this.internalEventService.emit('antennaCreated', antenna);
 
 			return await this.antennaEntityService.pack(antenna);
 		});

@@ -4,7 +4,9 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import type { UsersRepository, SigninsRepository, UserProfilesRepository } from '@/models/_.js';
+import type { SigninsRepository, MiMeta } from '@/models/_.js';
+import type { Schema } from '@/misc/json-schema.js';
+import type { IEndpointMeta } from '@/server/api/endpoints.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { DI } from '@/di-symbols.js';
 import { RoleService } from '@/core/RoleService.js';
@@ -13,6 +15,8 @@ import { IdService } from '@/core/IdService.js';
 import { notificationRecieveConfig } from '@/models/json-schema/user.js';
 import { isSystemAccount } from '@/misc/is-system-account.js';
 import { CacheService } from '@/core/CacheService.js';
+import { UserEntityService } from '@/core/entities/UserEntityService.js';
+import { ApPersonService } from '@/core/activitypub/models/ApPersonService.js';
 
 export const meta = {
 	tags: ['admin'],
@@ -130,6 +134,10 @@ export const meta = {
 				type: 'boolean',
 				optional: false, nullable: false,
 			},
+			isRoot: {
+				type: 'boolean',
+				optional: false, nullable: false,
+			},
 			isSilenced: {
 				type: 'boolean',
 				optional: false, nullable: false,
@@ -143,6 +151,10 @@ export const meta = {
 				optional: false, nullable: false,
 			},
 			lastActiveDate: {
+				type: 'string',
+				optional: false, nullable: true,
+			},
+			lastFetchedFeaturedAt: {
 				type: 'string',
 				optional: false, nullable: true,
 			},
@@ -225,9 +237,57 @@ export const meta = {
 				type: 'string',
 				optional: false, nullable: true,
 			},
+			movedAt: {
+				type: 'string',
+				optional: true, nullable: true,
+			},
+			movedTo: {
+				type: 'object',
+				optional: true, nullable: true,
+				properties: {
+					uri: {
+						type: 'string',
+						format: 'uri',
+						nullable: false, optional: false,
+					},
+					user: {
+						type: 'object',
+						ref: 'UserDetailed',
+						nullable: true, optional: true,
+					},
+				},
+			},
+			alsoKnownAs: {
+				type: 'array',
+				nullable: true, optional: true,
+				items: {
+					type: 'object',
+					nullable: false, optional: false,
+					properties: {
+						uri: {
+							type: 'string',
+							format: 'uri',
+							nullable: false, optional: false,
+						},
+						user: {
+							type: 'object',
+							ref: 'UserDetailed',
+							nullable: true, optional: true,
+						},
+					},
+				},
+			},
+			loggedInDates: {
+				type: 'array',
+				optional: true, nullable: false,
+				items: {
+					type: 'string',
+					optional: false, nullable: false,
+				},
+			},
 		},
 	},
-} as const;
+} as const satisfies IEndpointMeta;
 
 export const paramDef = {
 	type: 'object',
@@ -235,16 +295,13 @@ export const paramDef = {
 		userId: { type: 'string', format: 'misskey:id' },
 	},
 	required: ['userId'],
-} as const;
+} as const satisfies Schema;
 
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
-		@Inject(DI.usersRepository)
-		private usersRepository: UsersRepository,
-
-		@Inject(DI.userProfilesRepository)
-		private userProfilesRepository: UserProfilesRepository,
+		@Inject(DI.meta)
+		private readonly serverSettings: MiMeta,
 
 		@Inject(DI.signinsRepository)
 		private signinsRepository: SigninsRepository,
@@ -253,23 +310,20 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private roleEntityService: RoleEntityService,
 		private idService: IdService,
 		private readonly cacheService: CacheService,
+		private readonly apPersonService: ApPersonService,
+		private readonly userEntityService: UserEntityService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			const [user, profile] = await Promise.all([
-				this.usersRepository.findOneBy({ id: ps.userId }),
-				this.userProfilesRepository.findOneBy({ userId: ps.userId }),
+				this.cacheService.findUserById(ps.userId),
+				this.cacheService.userProfileCache.fetch(ps.userId),
 			]);
-
-			if (user == null || profile == null) {
-				throw new Error('user not found');
-			}
 
 			const isModerator = await this.roleService.isModerator(user);
 			const isAdministrator = await this.roleService.isAdministrator(user);
 			const isSilenced = user.isSilenced || !(await this.roleService.getUserPolicies(user.id)).canPublicNote;
 
-			const _me = await this.usersRepository.findOneByOrFail({ id: me.id });
-			if (!await this.roleService.isAdministrator(_me) && await this.roleService.isAdministrator(user)) {
+			if (!await this.roleService.isAdministrator(me) && await this.roleService.isAdministrator(user)) {
 				throw new Error('cannot show info of admin');
 			}
 
@@ -279,6 +333,21 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			const roles = await this.roleService.getUserRoles(user.id);
 
 			const followStats = await this.cacheService.getFollowStats(user.id);
+
+			const movedAt = user.movedAt?.toISOString();
+
+			const movedToUser = user.movedToUri ? await this.apPersonService.resolvePerson(user.movedToUri) : null;
+			const movedTo = user.movedToUri ? {
+				uri: user.movedToUri,
+				user: movedToUser ? await this.userEntityService.pack(movedToUser, me, { schema: 'UserDetailed' }) : undefined,
+			} : null;
+
+			const aka = await this.userEntityService.fetchAlsoKnownAs(user);
+			const akaUsers = aka ? await this.userEntityService.packMany(aka.map(aka => aka.id).filter(id => id != null), me, { schema: 'UserDetailed' }) : [];
+			const alsoKnownAs = aka?.map(aka => ({
+				uri: aka.uri,
+				user: aka.id ? akaUsers.find(u => u.id === aka.id) : undefined,
+			}));
 
 			return {
 				email: profile.email,
@@ -299,6 +368,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				notificationRecieveConfig: profile.notificationRecieveConfig,
 				isModerator: isModerator,
 				isAdministrator: isAdministrator,
+				isRoot: this.serverSettings.rootUserId === user.id,
 				isSystem: isSystemAccount(user),
 				isSilenced: isSilenced,
 				isSuspended: user.isSuspended,
@@ -318,6 +388,11 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 					totalFollowers: Math.max(user.followersCount, followStats.localFollowers + followStats.remoteFollowers),
 					totalFollowing: Math.max(user.followingCount, followStats.localFollowing + followStats.remoteFollowing),
 				},
+				lastFetchedFeaturedAt: user.lastFetchedFeaturedAt?.toISOString() ?? null,
+				loggedInDates: profile.loggedInDates,
+				movedAt,
+				movedTo,
+				alsoKnownAs,
 			};
 		});
 	}

@@ -9,13 +9,15 @@ import { isText, isTag, Text } from 'domhandler';
 import * as htmlparser2 from 'htmlparser2';
 import { Node, Document, ChildNode, Element, ParentNode } from 'domhandler';
 import * as domserializer from 'dom-serializer';
+import * as mfm from 'mfm-js';
+import * as Acct from '@/misc/acct.js';
 import { DI } from '@/di-symbols.js';
+import { UtilityService } from '@/core/UtilityService.js';
 import type { Config } from '@/config.js';
 import { intersperse } from '@/misc/prelude/array.js';
 import { normalizeForSearch } from '@/misc/normalize-for-search.js';
 import type { IMentionedRemoteUsers } from '@/models/Note.js';
 import { bindThis } from '@/decorators.js';
-import type * as mfm from 'mfm-js';
 
 const urlRegex = /^https?:\/\/[\w\/:%#@$&?!()\[\]~.,=+\-]+/;
 const urlRegexFull = /^https?:\/\/[\w\/:%#@$&?!()\[\]~.,=+\-]+$/;
@@ -27,6 +29,7 @@ export class MfmService {
 	constructor(
 		@Inject(DI.config)
 		private config: Config,
+		private readonly utilityService: UtilityService,
 	) {
 	}
 
@@ -299,7 +302,7 @@ export class MfmService {
 							(note that the `rp` are to be ignored, they only exist
 							for browsers who don't understand ruby)
 						*/
-						let nonRtNodes = [];
+						let nonRtNodes: ChildNode[] = [];
 						// scan children, ignore `rp`, split on `rt`
 						for (const child of node.childNodes) {
 							if (isText(child)) {
@@ -335,6 +338,38 @@ export class MfmService {
 					break;
 				}
 
+				// Replace iframe with link so we can generate previews.
+				// We shouldn't normally see this, but federated blogging platforms (WordPress, MicroBlog.Pub) can send it.
+				case 'iframe': {
+					const txt: string | undefined = node.attribs.title || node.attribs.alt;
+					const href: string | undefined = node.attribs.src;
+					if (href) {
+						if (href.match(/[\s>]/)) {
+							if (txt) {
+								// href is invalid + has a label => render a pseudo-link
+								text += `${text} (${href})`;
+							} else {
+								// href is invalid + no label => render plain text
+								text += href;
+							}
+						} else {
+							if (txt) {
+								// href is valid + has a label => render a link
+								const label = txt
+									.replaceAll('[', '(')
+									.replaceAll(']', ')')
+									.replaceAll(/\r?\n/, ' ')
+									.replaceAll('`', '\'');
+								text += `[${label}](<${href}>)`;
+							} else {
+								// href is valid + no label => render a plain URL
+								text += `<${href}>`;
+							}
+						}
+					}
+					break;
+				}
+
 				default:	// includes inline elements
 				{
 					appendChildren(node.childNodes);
@@ -345,7 +380,7 @@ export class MfmService {
 	}
 
 	@bindThis
-	public toHtml(nodes: mfm.MfmNode[] | null, mentionedRemoteUsers: IMentionedRemoteUsers = [], additionalAppenders: Appender[] = []) {
+	public toHtml(nodes: mfm.MfmNode[] | null, mentionedRemoteUsers: IMentionedRemoteUsers = [], additionalAppenders: Appender[] = [], inline = false) {
 		if (nodes == null) {
 			return null;
 		}
@@ -594,9 +629,15 @@ export class MfmService {
 			additionalAppender(doc, body);
 		}
 
-		return domserializer.render(body, {
+		let result = domserializer.render(body, {
 			encodeEntities: 'utf8'
 		});
+
+		if (inline) {
+			result = result.replace(/^<p>/, '').replace(/<\/p>$/, '');
+		}
+
+		return result;
 	}
 
 	// the toMastoApiHtml function was taken from Iceshrimp and written by zotan and modified by marie to work with the current MK version
@@ -890,4 +931,32 @@ export class MfmService {
 
 		return result;
 	}
+
+	/**
+	 * Extracts unique, deduplicated, and host-normalized mentions from a chunk of MFM.
+	 * Keep in sync with frontend extractMentions() helper.
+	 * @param nodes MFM nodes to search.
+	 * @param selfHost How to interpret "local" mentions (without a host).
+	 */
+	@bindThis
+	public extractMentions(nodes: mfm.MfmNode[], selfHost: string | null = null): MfmMention[] {
+		if (nodes.length < 1) return [];
+
+		const mentionNodes = mfm.extract(nodes, (node) => node.type === 'mention') as mfm.MfmMention[];
+		const mentions = mentionNodes.map(({ props: mfmMention }) => {
+			// Re-parse to normalize host
+			const mention = this.utilityService.parseAcct(mfmMention, false, selfHost);
+			const acct = '@' + Acct.toString(mention);
+			mfmMention = { ...mention, acct };
+
+			// Generate a further-normalized key
+			const key = acct.toLowerCase();
+			return [key, mfmMention] as const;
+		});
+
+		// Deduplicate the list using normalized key, but preserve the as-entered mentions.
+		return Array.from(new Map(mentions).values());
+	}
 }
+
+export type MfmMention = mfm.MfmMention['props'];

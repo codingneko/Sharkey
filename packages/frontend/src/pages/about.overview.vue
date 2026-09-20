@@ -15,8 +15,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 	</div>
 
 	<MkKeyValue>
-		<template #key>{{ i18n.ts.description }}</template>
-		<template #value><div v-html="sanitizeHtml(instance.description)"></div></template>
+		<template #key>{{ i18n.ts.about }}</template>
+		<template #value><div v-html="sanitizeHtml(instance.about || instance.description)"></div></template>
 	</MkKeyValue>
 
 	<FormSection>
@@ -67,10 +67,6 @@ SPDX-License-Identifier: AGPL-3.0-only
 					</template>
 				</MkKeyValue>
 			</FormSplit>
-			<FormLink v-if="instance.impressumUrl" :to="instance.impressumUrl" external>
-				<template #icon><i class="ti ti-user-shield"></i></template>
-				{{ i18n.ts.impressum }}
-			</FormLink>
 			<div class="_gaps_s">
 				<FormLink v-if="instance.impressumUrl" :to="instance.impressumUrl" external>
 					<template #icon><i class="ti ti-user-shield"></i></template>

@@ -6,7 +6,8 @@
 import { Injectable } from '@nestjs/common';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
-import { QUEUE_TYPES, QueueService } from '@/core/QueueService.js';
+import { QueueService } from '@/core/QueueService.js';
+import { QUEUE_TYPES } from '@/queue/const.js';
 
 export const meta = {
 	tags: ['admin'],
@@ -14,6 +15,76 @@ export const meta = {
 	requireCredential: true,
 	requireModerator: true,
 	kind: 'read:admin:queue',
+
+	res: {
+		type: 'array',
+		nullable: false, optional: false,
+		items: {
+			type: 'object',
+			nullable: false, optional: false,
+			properties: {
+				id: {
+					type: 'string',
+					nullable: false, optional: true,
+				},
+				name: {
+					type: 'string',
+					nullable: false, optional: false,
+				},
+				data: {
+					type: 'object',
+					nullable: true, optional: true,
+					additionalProperties: true,
+				},
+				opts: {
+					type: 'object',
+					nullable: false, optional: false,
+					additionalProperties: true,
+				},
+				timestamp: {
+					type: 'number',
+					nullable: false, optional: false,
+				},
+				processedOn: {
+					type: 'number',
+					nullable: false, optional: true,
+				},
+				processedBy: {
+					type: 'string',
+					nullable: false, optional: true,
+				},
+				finishedOn: {
+					type: 'number',
+					nullable: false, optional: true,
+				},
+				progress: {},
+				attempts: {
+					type: 'number',
+					nullable: false, optional: false,
+				},
+				delay: {
+					type: 'number',
+					nullable: false, optional: false,
+				},
+				failedReason: {
+					type: 'string',
+					nullable: false, optional: true,
+				},
+				stackTrace: {
+					type: 'array',
+					nullable: false, optional: true,
+					items: {
+						type: 'string',
+					},
+				},
+				returnValue: {},
+				isFailed: {
+					type: 'boolean',
+					nullable: false, optional: true,
+				},
+			},
+		},
+	},
 } as const;
 
 export const paramDef = {
@@ -32,7 +103,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private queueService: QueueService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
-			return this.queueService.queueGetJobs(ps.queue, ps.state, ps.search);
+			return await this.queueService.queueGetJobs(ps.queue, ps.state, ps.search);
 		});
 	}
 }

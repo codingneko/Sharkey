@@ -3,56 +3,59 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { MoreThan } from 'typeorm';
-import { Inject, Injectable } from '@nestjs/common';
-import { USER_ONLINE_THRESHOLD } from '@/const.js';
-import type { UsersRepository } from '@/models/_.js';
+import { Injectable } from '@nestjs/common';
 import { Endpoint } from '@/server/api/endpoint-base.js';
-import { DI } from '@/di-symbols.js';
+import { InstanceStatsService } from '@/core/InstanceStatsService.js';
+import type { IEndpointMeta } from '@/server/api/endpoints.js';
+import type { Schema } from '@/misc/json-schema.js';
 
 export const meta = {
 	tags: ['meta'],
 
 	requireCredential: false,
+
 	allowGet: true,
-	cacheSec: 60 * 1,
+	cacheSec: 60,
+
 	res: {
 		type: 'object',
 		optional: false, nullable: false,
 		properties: {
 			count: {
 				type: 'number',
-				nullable: false,
+				nullable: false, optional: false,
+			},
+			countAcrossNetwork: {
+				type: 'number',
+				nullable: false, optional: false,
 			},
 		},
 	},
 
-	// 2 calls per second
+	// 20 calls, then 4 per second
 	limit: {
-		duration: 1000,
-		max: 2,
+		type: 'bucket',
+		size: 20,
+		dripRate: 250,
 	},
-} as const;
+} as const satisfies IEndpointMeta;
 
 export const paramDef = {
 	type: 'object',
 	properties: {},
 	required: [],
-} as const;
+} as const satisfies Schema;
 
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
-		@Inject(DI.usersRepository)
-		private usersRepository: UsersRepository,
+		private readonly instanceStatsService: InstanceStatsService,
 	) {
 		super(meta, paramDef, async () => {
-			const count = await this.usersRepository.countBy({
-				lastActiveDate: MoreThan(new Date(Date.now() - USER_ONLINE_THRESHOLD)),
-			});
-
+			const stats = await this.instanceStatsService.fetch();
 			return {
-				count,
+				count: stats.localUsersOnline,
+				countAcrossNetwork: stats.localUsersOnline + stats.remoteUsersOnline,
 			};
 		});
 	}

@@ -6,8 +6,11 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { Not, IsNull, Like, DataSource } from 'typeorm';
 import type { MiUser } from '@/models/User.js';
+import { isLocalUser } from '@/models/User.js';
 import { AppLockService } from '@/core/AppLockService.js';
+import { TimeService } from '@/global/TimeService.js';
 import { DI } from '@/di-symbols.js';
+import { SystemAccountService } from '@/core/SystemAccountService.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import type { UsersRepository } from '@/models/_.js';
 import { bindThis } from '@/decorators.js';
@@ -31,21 +34,25 @@ export default class UsersChart extends Chart<typeof schema> { // eslint-disable
 		private appLockService: AppLockService,
 		private userEntityService: UserEntityService,
 		private chartLoggerService: ChartLoggerService,
+		private readonly timeService: TimeService,
+		private readonly systemAccountService: SystemAccountService,
 	) {
 		super(db, (k) => appLockService.getChartInsertLock(k), chartLoggerService.logger, name, schema);
 	}
 
+	protected getCurrentDate(): Date {
+		return this.timeService.date;
+	}
+
 	protected async tickMajor(): Promise<Partial<KVs<typeof schema>>> {
-		const [localCount, remoteCount] = await Promise.all([
-			// that Not(Like()) is ugly, but it matches the logic in
-			// packages/backend/src/models/User.ts to not count "system"
-			// accounts
-			this.usersRepository.countBy({ host: IsNull(), username: Not(Like('%.%')) }),
+		const [localCount, remoteCount, systemAccounts] = await Promise.all([
+			this.usersRepository.countBy({ host: IsNull() }),
 			this.usersRepository.countBy({ host: Not(IsNull()) }),
+			this.systemAccountService.list(),
 		]);
 
 		return {
-			'local.total': localCount,
+			'local.total': localCount - systemAccounts.length,
 			'remote.total': remoteCount,
 		};
 	}
@@ -55,10 +62,10 @@ export default class UsersChart extends Chart<typeof schema> { // eslint-disable
 	}
 
 	@bindThis
-	public async update(user: { id: MiUser['id'], host: MiUser['host'] }, isAdditional: boolean): Promise<void> {
-		const prefix = this.userEntityService.isLocalUser(user) ? 'local' : 'remote';
+	public update(user: { id: MiUser['id'], host: MiUser['host'] }, isAdditional: boolean): void {
+		const prefix = isLocalUser(user) ? 'local' : 'remote';
 
-		await this.commit({
+		this.commit({
 			[`${prefix}.total`]: isAdditional ? 1 : -1,
 			[`${prefix}.inc`]: isAdditional ? 1 : 0,
 			[`${prefix}.dec`]: isAdditional ? 0 : 1,

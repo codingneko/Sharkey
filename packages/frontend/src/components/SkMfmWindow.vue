@@ -1,6 +1,8 @@
 <!--
 SPDX-FileCopyrightText: marie and other Sharkey contributors
 SPDX-License-Identifier: AGPL-3.0-only
+
+Displays a sheet of info about MFM.
 -->
 
 <template>
@@ -305,7 +307,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<p>{{ i18n.ts._mfm.sparkleDescription }}</p>
 						<div class="preview">
 							<Mfm :text="preview_sparkle"/>
-							<MkTextarea v-model="preview_sparkle"><span>MFM</span></MkTextarea>
+							<MkTextarea v-model="preview_sparkle"><template #label>MFM</template></MkTextarea>
 						</div>
 					</div>
 				</div>
@@ -315,7 +317,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<p>{{ i18n.ts._mfm.rotateDescription }}</p>
 						<div class="preview">
 							<Mfm :text="preview_rotate"/>
-							<MkTextarea v-model="preview_rotate"><span>MFM</span></MkTextarea>
+							<MkTextarea v-model="preview_rotate"><template #label>MFM</template></MkTextarea>
 						</div>
 					</div>
 				</div>
@@ -325,7 +327,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<p>{{ i18n.ts._mfm.cropDescription }}</p>
 						<div class="preview">
 							<Mfm :text="preview_crop" />
-							<MkTextarea v-model="preview_crop"><span>MFM</span></MkTextarea>
+							<MkTextarea v-model="preview_crop"><template #label>MFM</template></MkTextarea>
 						</div>
 					</div>
 				</div>
@@ -335,7 +337,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<p>{{ i18n.ts._mfm.positionDescription }}</p>
 						<div class="preview">
 							<Mfm :text="preview_position"/>
-							<MkTextarea v-model="preview_position"><span>MFM</span></MkTextarea>
+							<MkTextarea v-model="preview_position"><template #label>MFM</template></MkTextarea>
 						</div>
 					</div>
 				</div>
@@ -347,7 +349,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<p>{{ i18n.ts._mfm.followMouseDescription }}</p>
 						<div class="preview">
 							<Mfm :text="preview_followmouse"/>
-							<MkTextarea v-model="preview_followmouse"><span>MFM</span></MkTextarea>
+							<MkTextarea v-model="preview_followmouse"><template #label>MFM</template></MkTextarea>
 						</div>
 					</div>
 				</div>
@@ -357,7 +359,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<p>{{ i18n.ts._mfm.scaleDescription }}</p>
 						<div class="preview">
 							<Mfm :text="preview_scale"/>
-							<MkTextarea v-model="preview_scale"><span>MFM</span></MkTextarea>
+							<MkTextarea v-model="preview_scale"><template #label>MFM</template></MkTextarea>
 						</div>
 					</div>
 				</div>
@@ -367,7 +369,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<p>{{ i18n.ts._mfm.fadeDescription }}</p>
 						<div class="preview">
 							<Mfm :text="preview_fade" />
-							<MkTextarea v-model="preview_fade"><span>MFM</span></MkTextarea>
+							<MkTextarea v-model="preview_fade"><template #label>MFM</template></MkTextarea>
 						</div>
 					</div>
 				</div>
@@ -377,7 +379,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<p>{{ i18n.ts._mfm.foregroundDescription }}</p>
 						<div class="preview">
 							<Mfm :text="preview_fg"/>
-							<MkTextarea v-model="preview_fg"><span>MFM</span></MkTextarea>
+							<MkTextarea v-model="preview_fg"><template #label>MFM</template></MkTextarea>
 						</div>
 					</div>
 				</div>
@@ -387,7 +389,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<p>{{ i18n.ts._mfm.backgroundDescription }}</p>
 						<div class="preview">
 							<Mfm :text="preview_bg"/>
-							<MkTextarea v-model="preview_bg"><span>MFM</span></MkTextarea>
+							<MkTextarea v-model="preview_bg"><template #label>MFM</template></MkTextarea>
 						</div>
 					</div>
 				</div>
@@ -397,7 +399,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<p>{{ i18n.ts._mfm.borderDescription }}</p>
 						<div class="preview">
 							<Mfm :text="preview_border"/>
-							<MkTextarea v-model="preview_border"><span>MFM</span></MkTextarea>
+							<MkTextarea v-model="preview_border"><template #label>MFM</template></MkTextarea>
 						</div>
 					</div>
 				</div>
@@ -407,7 +409,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<p>{{ i18n.ts._mfm.plainDescription }}</p>
 						<div class="preview">
 							<Mfm :text="preview_plain"/>
-							<MkTextarea v-model="preview_plain"><span>MFM</span></MkTextarea>
+							<MkTextarea v-model="preview_plain"><template #label>MFM</template></MkTextarea>
 						</div>
 					</div>
 				</div>

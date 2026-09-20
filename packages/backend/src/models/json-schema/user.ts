@@ -64,6 +64,30 @@ export const packedUserLiteSchema = {
 			example: 'misskey.example.com',
 			description: 'The local host is represented with `null`.',
 		},
+		createdAt: {
+			type: 'string',
+			nullable: false, optional: false,
+			format: 'date-time',
+		},
+		updatedAt: {
+			type: 'string',
+			nullable: true, optional: false,
+			format: 'date-time',
+		},
+		lastFetchedAt: {
+			type: 'string',
+			nullable: true, optional: false,
+			format: 'date-time',
+		},
+		approved: {
+			type: 'boolean',
+			nullable: false, optional: false,
+		},
+		description: {
+			type: 'string',
+			nullable: true, optional: false,
+			example: 'Hi masters, I am Ai!',
+		},
 		avatarUrl: {
 			type: 'string',
 			format: 'url',
@@ -72,16 +96,6 @@ export const packedUserLiteSchema = {
 		avatarBlurhash: {
 			type: 'string',
 			nullable: true, optional: false,
-		},
-		description: {
-			type: 'string',
-			nullable: true, optional: false,
-			example: 'Hi masters, I am Ai!',
-		},
-		createdAt: {
-			type: 'string',
-			nullable: false, optional: false,
-			format: 'date-time',
 		},
 		avatarDecorations: {
 			type: 'array',
@@ -133,11 +147,6 @@ export const packedUserLiteSchema = {
 			nullable: false, optional: true,
 			default: false,
 		},
-		isSystem: {
-			type: 'boolean',
-			nullable: false, optional: true,
-			default: false,
-		},
 		noindex: {
 			type: 'boolean',
 			nullable: false, optional: false,
@@ -167,6 +176,10 @@ export const packedUserLiteSchema = {
 			nullable: false, optional: true,
 		},
 		isSilenced: {
+			type: 'boolean',
+			nullable: false, optional: false,
+		},
+		bypassSilence: {
 			type: 'boolean',
 			nullable: false, optional: false,
 		},
@@ -214,7 +227,23 @@ export const packedUserLiteSchema = {
 					type: 'boolean',
 					nullable: false, optional: false,
 				},
+				mandatoryCW: {
+					type: 'string',
+					nullable: true, optional: false,
+				},
 			},
+		},
+		followersCount: {
+			type: 'number',
+			nullable: false, optional: false,
+		},
+		followingCount: {
+			type: 'number',
+			nullable: false, optional: false,
+		},
+		notesCount: {
+			type: 'number',
+			nullable: false, optional: false,
 		},
 		emojis: {
 			type: 'object',
@@ -276,28 +305,15 @@ export const packedUserDetailedNotMeOnlySchema = {
 		},
 		movedTo: {
 			type: 'string',
+			format: 'id',
+			nullable: true, optional: false,
+		},
+		movedToUri: {
+			type: 'string',
 			format: 'uri',
 			nullable: true, optional: false,
 		},
-		alsoKnownAs: {
-			type: 'array',
-			nullable: true, optional: false,
-			items: {
-				type: 'string',
-				format: 'id',
-				nullable: false, optional: false,
-			},
-		},
-		updatedAt: {
-			type: 'string',
-			nullable: true, optional: false,
-			format: 'date-time',
-		},
-		lastFetchedAt: {
-			type: 'string',
-			nullable: true, optional: false,
-			format: 'date-time',
-		},
+		// alsoKnownAs moved to packedMeDetailedOnlySchema for privacy
 		bannerUrl: {
 			type: 'string',
 			format: 'url',
@@ -376,18 +392,6 @@ export const packedUserDetailedNotMeOnlySchema = {
 				nullable: false, optional: false,
 				format: 'url',
 			},
-		},
-		followersCount: {
-			type: 'number',
-			nullable: false, optional: false,
-		},
-		followingCount: {
-			type: 'number',
-			nullable: false, optional: false,
-		},
-		notesCount: {
-			type: 'number',
-			nullable: false, optional: false,
 		},
 		pinnedNoteIds: {
 			type: 'array',
@@ -472,6 +476,18 @@ export const packedUserDetailedNotMeOnlySchema = {
 			type: 'boolean',
 			nullable: false, optional: true,
 		},
+		isDeleted: {
+			type: 'boolean',
+			nullable: false, optional: true,
+		},
+		deletedAt: {
+			type: 'string',
+			nullable: true, optional: true,
+		},
+		isSystem: {
+			type: 'boolean',
+			nullable: false, optional: true,
+		},
 		//#region relations
 		isFollowing: {
 			type: 'boolean',
@@ -548,6 +564,10 @@ export const packedMeDetailedOnlySchema = {
 			type: 'boolean',
 			nullable: true, optional: false,
 		},
+		isRoot: {
+			type: 'boolean',
+			nullable: true, optional: true,
+		},
 		injectFeaturedNote: {
 			type: 'boolean',
 			nullable: false, optional: false,
@@ -585,10 +605,6 @@ export const packedMeDetailedOnlySchema = {
 			nullable: false, optional: false,
 		},
 		isExplorable: {
-			type: 'boolean',
-			nullable: false, optional: false,
-		},
-		isDeleted: {
 			type: 'boolean',
 			nullable: false, optional: false,
 		},
@@ -715,18 +731,7 @@ export const packedMeDetailedOnlySchema = {
 			type: 'array',
 			nullable: false, optional: false,
 			items: {
-				type: 'object',
-				nullable: false, optional: false,
-				properties: {
-					name: {
-						type: 'string',
-						nullable: false, optional: false,
-					},
-					unlockedAt: {
-						type: 'number',
-						nullable: false, optional: false,
-					},
-				},
+				ref: 'Achievement',
 			},
 		},
 		loggedInDays: {
@@ -737,6 +742,13 @@ export const packedMeDetailedOnlySchema = {
 			type: 'object',
 			nullable: false, optional: false,
 			ref: 'RolePolicies',
+		},
+		permissions: {
+			type: 'array',
+			nullable: false, optional: false,
+			items: {
+				type: 'string',
+			},
 		},
 		twoFactorEnabled: {
 			type: 'boolean',
@@ -760,6 +772,10 @@ export const packedMeDetailedOnlySchema = {
 		},
 		emailVerified: {
 			type: 'boolean',
+			nullable: true, optional: true,
+		},
+		signupReason: {
+			type: 'string',
 			nullable: true, optional: true,
 		},
 		securityKeysList: {
@@ -801,6 +817,36 @@ export const packedMeDetailedOnlySchema = {
 			type: 'string',
 			enum: userUnsignedFetchOptions,
 			nullable: false, optional: false,
+		},
+		// alsoKnownAs moved from packedUserDetailedNotMeOnly for privacy
+		alsoKnownAs: {
+			type: 'array',
+			nullable: true, optional: false,
+			items: {
+				type: 'string',
+				format: 'id',
+				nullable: false, optional: false,
+			},
+		},
+		skAlsoKnownAs: {
+			type: 'array',
+			nullable: true, optional: false,
+			items: {
+				type: 'object',
+				nullable: false, optional: false,
+				properties: {
+					uri: {
+						type: 'string',
+						format: 'uri',
+						nullable: false, optional: false,
+					},
+					id: {
+						type: 'string',
+						format: 'id',
+						nullable: true, optional: false,
+					},
+				},
+			},
 		},
 	},
 } as const;

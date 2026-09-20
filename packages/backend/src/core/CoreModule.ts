@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { Module } from '@nestjs/common';
+import { Module, type Provider, type Import } from '@nestjs/common';
 import { FanoutTimelineEndpointService } from '@/core/FanoutTimelineEndpointService.js';
 import { AbuseReportService } from '@/core/AbuseReportService.js';
 import { SystemWebhookEntityService } from '@/core/entities/SystemWebhookEntityService.js';
@@ -15,11 +15,15 @@ import { SystemWebhookService } from '@/core/SystemWebhookService.js';
 import { UserSearchService } from '@/core/UserSearchService.js';
 import { WebhookTestService } from '@/core/WebhookTestService.js';
 import { FlashService } from '@/core/FlashService.js';
-import { TimeService } from '@/core/TimeService.js';
-import { EnvService } from '@/core/EnvService.js';
+import { QueueLoggerService } from '@/queue/QueueLoggerService.js';
 import { ApUtilityService } from '@/core/activitypub/ApUtilityService.js';
 import { ApLogService } from '@/core/ApLogService.js';
-import { UpdateInstanceQueue } from '@/core/UpdateInstanceQueue.js';
+import { CollapsedQueueService } from '@/core/CollapsedQueueService.js';
+import { InstanceStatsService } from '@/core/InstanceStatsService.js';
+import { NoteVisibilityService } from '@/core/NoteVisibilityService.js';
+import { QueueStatsService } from '@/core/QueueStatsService.js';
+import { ServerStatsService } from '@/core/ServerStatsService.js';
+import { GlobalModule } from '@/GlobalModule.js';
 import { AccountMoveService } from './AccountMoveService.js';
 import { AccountUpdateService } from './AccountUpdateService.js';
 import { AnnouncementService } from './AnnouncementService.js';
@@ -38,11 +42,10 @@ import { FetchInstanceMetadataService } from './FetchInstanceMetadataService.js'
 import { GlobalEventService } from './GlobalEventService.js';
 import { HashtagService } from './HashtagService.js';
 import { HttpRequestService } from './HttpRequestService.js';
-import { IdService } from './IdService.js';
 import { ImageProcessingService } from './ImageProcessingService.js';
 import { SystemAccountService } from './SystemAccountService.js';
-import { InternalEventService } from './InternalEventService.js';
 import { InternalStorageService } from './InternalStorageService.js';
+import { ListenBrainzService } from './ListenBrainzService.js';
 import { MetaService } from './MetaService.js';
 import { MfmService } from './MfmService.js';
 import { ModerationLogService } from './ModerationLogService.js';
@@ -158,12 +161,9 @@ import { ApPersonService } from './activitypub/models/ApPersonService.js';
 import { ApQuestionService } from './activitypub/models/ApQuestionService.js';
 import { QueueModule } from './QueueModule.js';
 import { QueueService } from './QueueService.js';
-import { LoggerService } from './LoggerService.js';
 import { SponsorsService } from './SponsorsService.js';
-import type { Provider } from '@nestjs/common';
 
 //#region 文字列ベースでのinjection用(循環参照対応のため)
-const $LoggerService: Provider = { provide: 'LoggerService', useExisting: LoggerService };
 const $AbuseReportService: Provider = { provide: 'AbuseReportService', useExisting: AbuseReportService };
 const $AbuseReportNotificationService: Provider = { provide: 'AbuseReportNotificationService', useExisting: AbuseReportNotificationService };
 const $AccountMoveService: Provider = { provide: 'AccountMoveService', useExisting: AccountMoveService };
@@ -185,10 +185,9 @@ const $FetchInstanceMetadataService: Provider = { provide: 'FetchInstanceMetadat
 const $GlobalEventService: Provider = { provide: 'GlobalEventService', useExisting: GlobalEventService };
 const $HashtagService: Provider = { provide: 'HashtagService', useExisting: HashtagService };
 const $HttpRequestService: Provider = { provide: 'HttpRequestService', useExisting: HttpRequestService };
-const $IdService: Provider = { provide: 'IdService', useExisting: IdService };
 const $ImageProcessingService: Provider = { provide: 'ImageProcessingService', useExisting: ImageProcessingService };
-const $InternalEventService: Provider = { provide: 'InternalEventService', useExisting: InternalEventService };
 const $InternalStorageService: Provider = { provide: 'InternalStorageService', useExisting: InternalStorageService };
+const $ListenBrainzService: Provider = { provide: 'ListenBrainzService', useExisting: ListenBrainzService };
 const $MetaService: Provider = { provide: 'MetaService', useExisting: MetaService };
 const $MfmService: Provider = { provide: 'MfmService', useExisting: MfmService };
 const $ModerationLogService: Provider = { provide: 'ModerationLogService', useExisting: ModerationLogService };
@@ -202,6 +201,9 @@ const $PollService: Provider = { provide: 'PollService', useExisting: PollServic
 const $SystemAccountService: Provider = { provide: 'SystemAccountService', useExisting: SystemAccountService };
 const $PushNotificationService: Provider = { provide: 'PushNotificationService', useExisting: PushNotificationService };
 const $QueryService: Provider = { provide: 'QueryService', useExisting: QueryService };
+const $QueueService: Provider = { provide: 'QueueService', useExisting: QueueService };
+const $QueueStatsService: Provider = { provide: 'QueueStatsService', useExisting: QueueStatsService };
+const $ServerStatsService: Provider = { provide: 'ServerStatsService', useExisting: ServerStatsService };
 const $ReactionService: Provider = { provide: 'ReactionService', useExisting: ReactionService };
 const $ReactionsBufferingService: Provider = { provide: 'ReactionsBufferingService', useExisting: ReactionsBufferingService };
 const $RelayService: Provider = { provide: 'RelayService', useExisting: RelayService };
@@ -221,7 +223,7 @@ const $UserRenoteMutingService: Provider = { provide: 'UserRenoteMutingService',
 const $UserSearchService: Provider = { provide: 'UserSearchService', useExisting: UserSearchService };
 const $UserSuspendService: Provider = { provide: 'UserSuspendService', useExisting: UserSuspendService };
 const $UserAuthService: Provider = { provide: 'UserAuthService', useExisting: UserAuthService };
-const $UpdateInstanceQueue: Provider = { provide: 'UpdateInstanceQueue', useExisting: UpdateInstanceQueue };
+const $CollapsedQueueService: Provider = { provide: 'CollapsedQueueService', useExisting: CollapsedQueueService };
 const $VideoProcessingService: Provider = { provide: 'VideoProcessingService', useExisting: VideoProcessingService };
 const $UserWebhookService: Provider = { provide: 'UserWebhookService', useExisting: UserWebhookService };
 const $SystemWebhookService: Provider = { provide: 'SystemWebhookService', useExisting: SystemWebhookService };
@@ -238,8 +240,8 @@ const $ChannelFollowingService: Provider = { provide: 'ChannelFollowingService',
 const $ChatService: Provider = { provide: 'ChatService', useExisting: ChatService };
 const $RegistryApiService: Provider = { provide: 'RegistryApiService', useExisting: RegistryApiService };
 const $ReversiService: Provider = { provide: 'ReversiService', useExisting: ReversiService };
-const $TimeService: Provider = { provide: 'TimeService', useExisting: TimeService };
-const $EnvService: Provider = { provide: 'EnvService', useExisting: EnvService };
+const $InstanceStatsService = { provide: 'InstanceStatsService', useExisting: InstanceStatsService };
+const $NoteVisibilityService: Provider = { provide: 'NoteVisibilityService', useExisting: NoteVisibilityService };
 
 const $ChartLoggerService: Provider = { provide: 'ChartLoggerService', useExisting: ChartLoggerService };
 const $FederationChart: Provider = { provide: 'FederationChart', useExisting: FederationChart };
@@ -318,12 +320,15 @@ const $ApUtilityService: Provider = { provide: 'ApUtilityService', useExisting: 
 
 const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: SponsorsService };
 
+/** External module dependencies */
+const $Imports = [
+	GlobalModule,
+	QueueModule,
+] as const satisfies Import[];
+
 @Module({
-	imports: [
-		QueueModule,
-	],
+	imports: $Imports,
 	providers: [
-		LoggerService,
 		AbuseReportService,
 		AbuseReportNotificationService,
 		AccountMoveService,
@@ -345,10 +350,9 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		GlobalEventService,
 		HashtagService,
 		HttpRequestService,
-		IdService,
 		ImageProcessingService,
-		InternalEventService,
 		InternalStorageService,
+		ListenBrainzService,
 		MetaService,
 		MfmService,
 		ModerationLogService,
@@ -381,7 +385,7 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		UserSearchService,
 		UserSuspendService,
 		UserAuthService,
-		UpdateInstanceQueue,
+		CollapsedQueueService,
 		VideoProcessingService,
 		UserWebhookService,
 		SystemWebhookService,
@@ -398,8 +402,8 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		ChatService,
 		RegistryApiService,
 		ReversiService,
-		TimeService,
-		EnvService,
+		InstanceStatsService,
+		NoteVisibilityService,
 
 		ChartLoggerService,
 		FederationChart,
@@ -475,11 +479,12 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		ApQuestionService,
 		ApUtilityService,
 		QueueService,
+		QueueStatsService,
+		ServerStatsService,
 
 		SponsorsService,
 
 		//#region 文字列ベースでのinjection用(循環参照対応のため)
-		$LoggerService,
 		$AbuseReportService,
 		$AbuseReportNotificationService,
 		$AccountMoveService,
@@ -501,10 +506,9 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		$GlobalEventService,
 		$HashtagService,
 		$HttpRequestService,
-		$IdService,
 		$ImageProcessingService,
-		$InternalEventService,
 		$InternalStorageService,
+		$ListenBrainzService,
 		$MetaService,
 		$MfmService,
 		$ModerationLogService,
@@ -518,6 +522,9 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		$SystemAccountService,
 		$PushNotificationService,
 		$QueryService,
+		$QueueService,
+		$QueueStatsService,
+		$ServerStatsService,
 		$ReactionService,
 		$ReactionsBufferingService,
 		$RelayService,
@@ -537,7 +544,7 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		$UserSearchService,
 		$UserSuspendService,
 		$UserAuthService,
-		$UpdateInstanceQueue,
+		$CollapsedQueueService,
 		$VideoProcessingService,
 		$UserWebhookService,
 		$SystemWebhookService,
@@ -554,8 +561,8 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		$ChatService,
 		$RegistryApiService,
 		$ReversiService,
-		$TimeService,
-		$EnvService,
+		$InstanceStatsService,
+		$NoteVisibilityService,
 
 		$ChartLoggerService,
 		$FederationChart,
@@ -633,10 +640,12 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		//#endregion
 
 		$SponsorsService,
+
+		// This is here so that unit tests can new() up specific queue processors without loading the entire QueueProcessorModule.
+		// Also, to resolve a very specific and complex edge case involving FakeQueueService testing utility.
+		QueueLoggerService,
 	],
 	exports: [
-		QueueModule,
-		LoggerService,
 		AbuseReportService,
 		AbuseReportNotificationService,
 		AccountMoveService,
@@ -658,10 +667,9 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		GlobalEventService,
 		HashtagService,
 		HttpRequestService,
-		IdService,
 		ImageProcessingService,
-		InternalEventService,
 		InternalStorageService,
+		ListenBrainzService,
 		MetaService,
 		MfmService,
 		ModerationLogService,
@@ -694,7 +702,7 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		UserSearchService,
 		UserSuspendService,
 		UserAuthService,
-		UpdateInstanceQueue,
+		CollapsedQueueService,
 		VideoProcessingService,
 		UserWebhookService,
 		SystemWebhookService,
@@ -711,8 +719,8 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		ChatService,
 		RegistryApiService,
 		ReversiService,
-		TimeService,
-		EnvService,
+		InstanceStatsService,
+		NoteVisibilityService,
 
 		FederationChart,
 		NotesChart,
@@ -787,11 +795,12 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		ApQuestionService,
 		ApUtilityService,
 		QueueService,
+		QueueStatsService,
+		ServerStatsService,
 
 		SponsorsService,
 
 		//#region 文字列ベースでのinjection用(循環参照対応のため)
-		$LoggerService,
 		$AbuseReportService,
 		$AbuseReportNotificationService,
 		$AccountMoveService,
@@ -813,10 +822,9 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		$GlobalEventService,
 		$HashtagService,
 		$HttpRequestService,
-		$IdService,
 		$ImageProcessingService,
-		$InternalEventService,
 		$InternalStorageService,
+		$ListenBrainzService,
 		$MetaService,
 		$MfmService,
 		$ModerationLogService,
@@ -830,6 +838,9 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		$SystemAccountService,
 		$PushNotificationService,
 		$QueryService,
+		$QueueService,
+		$QueueStatsService,
+		$ServerStatsService,
 		$ReactionService,
 		$ReactionsBufferingService,
 		$RelayService,
@@ -849,7 +860,7 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		$UserSearchService,
 		$UserSuspendService,
 		$UserAuthService,
-		$UpdateInstanceQueue,
+		$CollapsedQueueService,
 		$VideoProcessingService,
 		$UserWebhookService,
 		$SystemWebhookService,
@@ -865,8 +876,8 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		$ChatService,
 		$RegistryApiService,
 		$ReversiService,
-		$TimeService,
-		$EnvService,
+		$InstanceStatsService,
+		$NoteVisibilityService,
 
 		$FederationChart,
 		$NotesChart,
@@ -943,6 +954,8 @@ const $SponsorsService: Provider = { provide: 'SponsorsService', useExisting: Sp
 		//#endregion
 
 		$SponsorsService,
-	],
+
+		$Imports,
+	].flat(),
 })
 export class CoreModule { }

@@ -6,13 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 <template>
 <PageWithHeader :actions="headerActions" :tabs="headerTabs">
 	<div v-if="error != null" class="_spacer" style="--MI_SPACER-w: 1200px;">
-		<div :class="$style.root">
-			<img :class="$style.img" :src="serverErrorImageUrl" draggable="false"/>
-			<p :class="$style.text">
-				<i class="ti ti-alert-triangle"></i>
-				{{ i18n.ts.nothing }}
-			</p>
-		</div>
+		<MkResult type="error"/>
 	</div>
 	<div v-else-if="list" class="_spacer" style="--MI_SPACER-w: 700px;">
 		<div v-if="list" class="members _margin">
@@ -42,7 +36,6 @@ import { i18n } from '@/i18n.js';
 import MkUserCardMini from '@/components/MkUserCardMini.vue';
 import MkButton from '@/components/MkButton.vue';
 import { definePage } from '@/page.js';
-import { serverErrorImageUrl } from '@/instance.js';
 
 const props = defineProps<{
 	listId: string;
@@ -69,29 +62,38 @@ function fetchList(): void {
 }
 
 function like() {
+	const listInstance = list.value;
+	if (!listInstance) return;
+
 	os.apiWithDialog('users/lists/favorite', {
-		listId: list.value.id,
+		listId: listInstance.id,
 	}).then(() => {
-		list.value.isLiked = true;
-		list.value.likedCount++;
+		listInstance.isLiked = true;
+		listInstance.likedCount++;
 	});
 }
 
 function unlike() {
+	const listInstance = list.value;
+	if (!listInstance) return;
+
 	os.apiWithDialog('users/lists/unfavorite', {
-		listId: list.value.id,
+		listId: listInstance.id,
 	}).then(() => {
-		list.value.isLiked = false;
-		list.value.likedCount--;
+		listInstance.isLiked = false;
+		listInstance.likedCount--;
 	});
 }
 
 async function create() {
+	const listInstance = list.value;
+	if (!listInstance) return;
+
 	const { canceled, result: name } = await os.inputText({
 		title: i18n.ts.enterListName,
 	});
 	if (canceled) return;
-	await os.apiWithDialog('users/lists/create-from-public', { name: name, listId: list.value.id });
+	await os.apiWithDialog('users/lists/create-from-public', { name: name, listId: listInstance.id });
 }
 
 watch(() => props.listId, fetchList, { immediate: true });

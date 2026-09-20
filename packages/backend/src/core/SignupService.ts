@@ -5,8 +5,6 @@
 
 import { generateKeyPair } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-//import bcrypt from 'bcryptjs';
-import * as argon2 from 'argon2';
 import { DataSource, IsNull } from 'typeorm';
 import { DI } from '@/di-symbols.js';
 import type { MiMeta, UsedUsernamesRepository, UsersRepository } from '@/models/_.js';
@@ -23,6 +21,8 @@ import { UtilityService } from '@/core/UtilityService.js';
 import { UserService } from '@/core/UserService.js';
 import { SystemAccountService } from '@/core/SystemAccountService.js';
 import { MetaService } from '@/core/MetaService.js';
+import { TimeService } from '@/global/TimeService.js';
+import { UserAuthService } from '@/core/UserAuthService.js';
 
 @Injectable()
 export class SignupService {
@@ -46,6 +46,8 @@ export class SignupService {
 		private systemAccountService: SystemAccountService,
 		private metaService: MetaService,
 		private usersChart: UsersChart,
+		private readonly timeService: TimeService,
+		private readonly userAuthService: UserAuthService,
 	) {
 	}
 
@@ -60,22 +62,21 @@ export class SignupService {
 		approved?: boolean;
 	}) {
 		const { username, password, passwordHash, host, reason } = opts;
-		let hash = passwordHash;
 
 		// Validate username
 		if (!this.userEntityService.validateLocalUsername(username)) {
 			throw new Error('INVALID_USERNAME');
 		}
 
-		if (password != null && passwordHash == null) {
-			// Validate password
-			if (!this.userEntityService.validatePassword(password)) {
-				throw new Error('INVALID_PASSWORD');
-			}
-
-			// Generate hash of password
-			//const salt = await bcrypt.genSalt(8);
-			hash = await argon2.hash(password);
+		let hash: string | null;
+		if (password && passwordHash) {
+			throw new Error('Cannot specify both password and passwordHash');
+		} else if (password) {
+			hash = await this.userAuthService.hashPassword(password);
+		} else if (passwordHash) {
+			hash = passwordHash;
+		} else {
+			hash = null;
 		}
 
 		// Generate secret
@@ -150,7 +151,7 @@ export class SignupService {
 			}));
 
 			await transactionalEntityManager.save(new MiUsedUsername({
-				createdAt: new Date(),
+				createdAt: this.timeService.date,
 				username: username.toLowerCase(),
 			}));
 		});

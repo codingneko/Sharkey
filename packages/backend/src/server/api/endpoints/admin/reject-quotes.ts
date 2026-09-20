@@ -7,9 +7,9 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import type { UsersRepository } from '@/models/_.js';
 import { DI } from '@/di-symbols.js';
-import { GlobalEventService } from '@/core/GlobalEventService.js';
 import { CacheService } from '@/core/CacheService.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
+import { InternalEventService } from '@/global/InternalEventService.js';
 
 export const meta = {
 	tags: ['admin'],
@@ -34,9 +34,9 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		@Inject(DI.usersRepository)
 		private readonly usersRepository: UsersRepository,
 
-		private readonly globalEventService: GlobalEventService,
 		private readonly cacheService: CacheService,
 		private readonly moderationLogService: ModerationLogService,
+		private readonly internalEventService: InternalEventService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			const user = await this.cacheService.findUserById(ps.userId);
@@ -44,20 +44,18 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			// Skip if there's nothing to do
 			if (user.rejectQuotes === ps.rejectQuotes) return;
 
-			// Log event first.
-			// This ensures that we don't "lose" the log if an error occurs
-			await this.moderationLogService.log(me, ps.rejectQuotes ? 'rejectQuotesUser' : 'acceptQuotesUser', {
-				userId: user.id,
-				userUsername: user.username,
-				userHost: user.host,
-			});
-
 			await this.usersRepository.update(ps.userId, {
 				rejectQuotes: ps.rejectQuotes,
 			});
 
 			// Synchronize caches and other processes
-			this.globalEventService.publishInternalEvent('localUserUpdated', { id: ps.userId });
+			await this.internalEventService.emit('userUpdated', { id: ps.userId });
+
+			await this.moderationLogService.log(me, ps.rejectQuotes ? 'rejectQuotesUser' : 'acceptQuotesUser', {
+				userId: user.id,
+				userUsername: user.username,
+				userHost: user.host,
+			});
 		});
 	}
 }

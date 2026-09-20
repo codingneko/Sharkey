@@ -40,6 +40,9 @@ export const FILE_TYPE_BROWSERSAFE = [
 	'video/webm',
 	'audio/webm',
 
+	// MKV files
+	'video/x-matroska',
+
 	'audio/aac',
 
 	// see https://github.com/misskey-dev/misskey/pull/10686
@@ -129,6 +132,7 @@ export const notificationTypes = [
 	'chatRoomInvitationReceived',
 	'achievementEarned',
 	'exportCompleted',
+	'importCompleted',
 	'login',
 	'createToken',
 	'test',
@@ -155,6 +159,7 @@ export const ROLE_POLICIES = [
 	'canManageAvatarDecorations',
 	'canSearchNotes',
 	'canUseTranslator',
+	'canFetchLBMetadata',
 	'canHideAds',
 	'driveCapacityMb',
 	'maxFileSizeMb',
@@ -177,11 +182,8 @@ export const ROLE_POLICIES = [
 	'canImportUserLists',
 	'chatAvailability',
 	'canTrend',
+	'canViewFederation',
 ] as const;
-
-export const DEFAULT_SERVER_ERROR_IMAGE_URL = '/client-assets/status/error.png';
-export const DEFAULT_NOT_FOUND_IMAGE_URL = '/client-assets/status/missingpage.webp';
-export const DEFAULT_INFO_IMAGE_URL = '/client-assets/status/nothinghere.png';
 
 export const MFM_TAGS = ['tada', 'jelly', 'twitch', 'shake', 'spin', 'jump', 'bounce', 'flip', 'x2', 'x3', 'x4', 'scale', 'position', 'fg', 'bg', 'border', 'font', 'blur', 'rainbow', 'sparkle', 'rotate', 'ruby', 'unixtime', 'crop', 'fade', 'followmouse'];
 export const MFM_PARAMS: Record<typeof MFM_TAGS[number], string[]> = {

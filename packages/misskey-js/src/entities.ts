@@ -1,16 +1,17 @@
-import { ModerationLogPayloads } from './consts.js';
-import {
+import type { ModerationLogPayloads } from './consts.js';
+import type {
 	Announcement,
 	EmojiDetailed,
 	MeDetailed,
 	Note,
+	Notification,
 	Page,
 	Role,
 	RolePolicies,
 	User,
 	UserDetailedNotMe,
 } from './autogen/models.js';
-import type { AuthenticationResponseJSON, PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/types';
+import type { AuthenticationResponseJSON, PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/server';
 
 export * from './autogen/entities.js';
 export * from './autogen/models.js';
@@ -133,11 +134,14 @@ export type ModerationLog = {
 	type: 'setMandatoryCW';
 	info: ModerationLogPayloads['setMandatoryCW'];
 } | {
-	type: 'setRemoteInstanceNSFW';
-	info: ModerationLogPayloads['setRemoteInstanceNSFW'];
+	type: 'setMandatoryCWForNote';
+	info: ModerationLogPayloads['setMandatoryCWForNote'];
 } | {
-	type: 'unsetRemoteInstanceNSFW';
-	info: ModerationLogPayloads['unsetRemoteInstanceNSFW'];
+	type: 'setMandatoryCWForInstance';
+	info: ModerationLogPayloads['setMandatoryCWForInstance'];
+} | {
+	type: 'restartMigration';
+	info: ModerationLogPayloads['restartMigration'];
 } | {
 	type: 'resetPassword';
 	info: ModerationLogPayloads['resetPassword'];
@@ -296,22 +300,22 @@ export type ServerStats = {
 
 export type ServerStatsLog = ServerStats[];
 
-export type QueueStats = {
-	deliver: {
-		activeSincePrevTick: number;
-		active: number;
-		waiting: number;
-		delayed: number;
-	};
-	inbox: {
-		activeSincePrevTick: number;
-		active: number;
-		waiting: number;
-		delayed: number;
-	};
-};
+// sync with backend src/queue/const.ts
+export const QUEUE_TYPES = [
+	'system',
+	'endedPollNotification',
+	'deliver',
+	'inbox',
+	'db',
+	'relationship',
+	'objectStorage',
+	'userWebhookDeliver',
+	'systemWebhookDeliver',
+	'scheduleNotePost',
+	'backgroundTask',
+] as const;
 
-export type QueueStatsLog = QueueStats[];
+export type QueueType = typeof QUEUE_TYPES[number];
 
 export type EmojiAdded = {
 	emoji: EmojiDetailed
@@ -395,3 +399,20 @@ export type SigninWithPasskeyResponse = {
 type Values<T extends Record<PropertyKey, unknown>> = T[keyof T];
 
 export type PartialRolePolicyOverride = Partial<{ [k in keyof RolePolicies]: Omit<Values<Role['policies']>, 'value'> & { value: RolePolicies[k] } }>;
+
+type ExportCompletedNotification = Notification & { type: 'exportCompleted' };
+type ImportCompletedNotification = Notification & { type: 'importCompleted' };
+
+export const exportEntityName = (i18n: any) => ({
+	antenna: i18n.ts.antennas,
+	blocking: i18n.ts.blockedUsers,
+	clip: i18n.ts.clips,
+	customEmoji: i18n.ts.customEmojis,
+	favorite: i18n.ts.favorites,
+	following: i18n.ts.following,
+	muting: i18n.ts.mutedUsers,
+	note: i18n.ts.notes,
+	userList: i18n.ts.lists,
+} as const satisfies Record<ExportCompletedNotification['exportedEntity'], string>);
+
+export const importEntityName = (i18n: any) => (exportEntityName(i18n) satisfies Record<ImportCompletedNotification['importedEntity'], string>);

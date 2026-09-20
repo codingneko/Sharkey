@@ -18,6 +18,8 @@ import { NoteCreateService } from '@/core/NoteCreateService.js';
 import { DI } from '@/di-symbols.js';
 import { isQuote, isRenote } from '@/misc/is-renote.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
+import { TimeService } from '@/global/TimeService.js';
+import { UserService } from '@/core/UserService.js';
 import { ApiError } from '../../error.js';
 
 export const meta = {
@@ -27,10 +29,11 @@ export const meta = {
 
 	prohibitMoved: true,
 
+	// Up to 10 post burst, then 4/second
 	limit: {
-		duration: ms('1hour'),
-		max: 300,
-		minInterval: ms('1sec'),
+		type: 'bucket',
+		size: 10,
+		dripRate: 250,
 	},
 
 	kind: 'write:notes',
@@ -260,6 +263,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 		private noteEntityService: NoteEntityService,
 		private noteCreateService: NoteCreateService,
+		private readonly timeService: TimeService,
+		private readonly userService: UserService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			if (ps.text && ps.text.length > this.config.maxNoteLength) {
@@ -300,29 +305,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 				if (renote == null) {
 					throw new ApiError(meta.errors.noSuchRenoteTarget);
-				} else if (isRenote(renote) && !isQuote(renote)) {
-					throw new ApiError(meta.errors.cannotReRenote);
-				}
-
-				// Check blocking
-				if (renote.userId !== me.id) {
-					const blockExist = await this.blockingsRepository.exists({
-						where: {
-							blockerId: renote.userId,
-							blockeeId: me.id,
-						},
-					});
-					if (blockExist) {
-						throw new ApiError(meta.errors.youHaveBeenBlocked);
-					}
-				}
-
-				if (renote.visibility === 'followers' && renote.userId !== me.id) {
-					// 他人のfollowers noteはreject
-					throw new ApiError(meta.errors.cannotRenoteDueToVisibility);
-				} else if (renote.visibility === 'specified') {
-					// specified / direct noteはreject
-					throw new ApiError(meta.errors.cannotRenoteDueToVisibility);
 				}
 
 				if (renote.channelId && renote.channelId !== ps.channelId) {
@@ -346,35 +328,18 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 				if (reply == null) {
 					throw new ApiError(meta.errors.noSuchReplyTarget);
-				} else if (isRenote(reply) && !isQuote(reply)) {
-					throw new ApiError(meta.errors.cannotReplyToPureRenote);
-				} else if (!await this.noteEntityService.isVisibleForMe(reply, me.id, { me })) {
-					throw new ApiError(meta.errors.cannotReplyToInvisibleNote);
 				} else if (reply.visibility === 'specified' && ps.visibility !== 'specified') {
 					throw new ApiError(meta.errors.cannotReplyToSpecifiedVisibilityNoteWithExtendedVisibility);
-				}
-
-				// Check blocking
-				if (reply.userId !== me.id) {
-					const blockExist = await this.blockingsRepository.exists({
-						where: {
-							blockerId: reply.userId,
-							blockeeId: me.id,
-						},
-					});
-					if (blockExist) {
-						throw new ApiError(meta.errors.youHaveBeenBlocked);
-					}
 				}
 			}
 
 			if (ps.poll) {
 				if (typeof ps.poll.expiresAt === 'number') {
-					if (ps.poll.expiresAt < Date.now()) {
+					if (ps.poll.expiresAt < this.timeService.now) {
 						throw new ApiError(meta.errors.cannotCreateAlreadyExpiredPoll);
 					}
 				} else if (typeof ps.poll.expiredAfter === 'number') {
-					ps.poll.expiresAt = Date.now() + ps.poll.expiredAfter;
+					ps.poll.expiresAt = this.timeService.now + ps.poll.expiredAfter;
 				}
 			}
 
@@ -390,7 +355,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			// 投稿を作成
 			try {
 				const note = await this.noteCreateService.create(me, {
-					createdAt: new Date(),
+					createdAt: this.timeService.date,
 					files: files,
 					poll: ps.poll ? {
 						choices: ps.poll.choices,
@@ -411,6 +376,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 					apEmojis: ps.noExtractEmojis ? [] : undefined,
 				});
 
+				this.userService.markUserActive(me, true);
+
 				return {
 					createdNote: await this.noteEntityService.pack(note, me),
 				};
@@ -423,6 +390,16 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 						throw new ApiError(meta.errors.containsTooManyMentions);
 					} else if (e.id === '1c0ea108-d1e3-4e8e-aa3f-4d2487626153') {
 						throw new ApiError(meta.errors.quoteDisabledForUser);
+					} else if (e.id === 'fd4cc33e-2a37-48dd-99cc-9b806eb2031a') {
+						throw new ApiError(meta.errors.cannotReRenote);
+					} else if (e.id === 'b6352a84-e5cd-4b05-a26c-63437a6b98ba') {
+						throw new ApiError(meta.errors.youHaveBeenBlocked);
+					} else if (e.id === 'be9529e9-fe72-4de0-ae43-0b363c4938af') {
+						throw new ApiError(meta.errors.cannotRenoteDueToVisibility);
+					} else if (e.id === '3ac74a84-8fd5-4bb0-870f-01804f82ce15') {
+						throw new ApiError(meta.errors.cannotReplyToPureRenote);
+					} else if (e.id === 'b98980fa-3780-406c-a935-b6d0eeee10d1') {
+						throw new ApiError(meta.errors.cannotReplyToInvisibleNote);
 					}
 				}
 				throw e;

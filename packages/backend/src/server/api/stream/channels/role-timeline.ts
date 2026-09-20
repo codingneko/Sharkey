@@ -7,7 +7,7 @@ import { Injectable } from '@nestjs/common';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { bindThis } from '@/decorators.js';
 import { RoleService } from '@/core/RoleService.js';
-import type { GlobalEvents } from '@/core/GlobalEventService.js';
+import type { RoleTimelineEventPayload } from '@/core/GlobalEventService.js';
 import type { JsonObject } from '@/misc/json-value.js';
 import { type Channel, NoteChannel, type MiChannelService } from '../channel.js';
 
@@ -40,7 +40,7 @@ class RoleTimelineChannel extends NoteChannel {
 	}
 
 	@bindThis
-	private async onEvent(data: GlobalEvents['roleTimeline']['payload']) {
+	private async onEvent(data: RoleTimelineEventPayload) {
 		const note = data.body;
 
 		if (note.visibility !== 'public') return;

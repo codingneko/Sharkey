@@ -1,10 +1,14 @@
 <!--
 SPDX-FileCopyrightText: marie and other Sharkey contributors
 SPDX-License-Identifier: AGPL-3.0-only
+
+Displays a sub-note in the Sharkey style. Used to display secondary notes in a given context.
+
+For example, when viewing a reply on the timeline, SkNoteSub will be used to display the note that is being replied to.
 -->
 
 <template>
-<div v-show="!isDeleted" v-if="!muted" ref="el" :class="[$style.root, { [$style.children]: depth > 1, [$style.isReply]: props.isReply, [$style.detailed]: props.detailed }]">
+<SkMutedNote v-show="!isDeleted" ref="rootComp" :note="appearNote" :mutedClass="$style.muted" :expandedClass="[$style.root, { [$style.children]: depth > 1, [$style.isReply]: props.isReply, [$style.detailed]: props.detailed }]" @expandMute="n => emit('expandMute', n)">
 	<div v-if="!hideLine" :class="$style.line"></div>
 	<div :class="$style.main">
 		<div v-if="note.channel" :class="$style.colorBar" :style="{ background: note.channel.color }"></div>
@@ -19,11 +23,11 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<div :class="$style.body">
 			<SkNoteHeader :class="$style.header" :note="note" :classic="true" :mini="true"/>
 			<div :class="$style.content">
-				<p v-if="mergedCW != null" :class="$style.cw">
-					<Mfm v-if="mergedCW != ''" style="margin-right: 8px;" :text="mergedCW" :isBlock="true" :author="note.user" :nyaize="'respect'"/>
+				<p v-if="appearNote.cw != null" :class="$style.cw">
+					<Mfm v-if="appearNote.cw != ''" style="margin-right: 8px;" :text="appearNote.cw" :isBlock="true" :author="note.user" :nyaize="'respect'"/>
 					<MkCwButton v-model="showContent" :text="note.text" :files="note.files" :poll="note.poll"/>
 				</p>
-				<div v-show="mergedCW == null || showContent">
+				<div v-show="appearNote.cw == null || showContent">
 					<MkSubNoteContent :class="$style.text" :note="note" :translating="translating" :translation="translation" :expandAllCws="props.expandAllCws"/>
 				</div>
 			</div>
@@ -39,8 +43,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 					v-tooltip="renoteTooltip"
 					class="_button"
 					:class="$style.noteFooterButton"
-					:style="renoted ? 'color: var(--MI_THEME-accent) !important;' : ''"
-					@click.stop="renoted ? undoRenote() : boostVisibility($event.shiftKey)"
+					:style="appearNote.isRenoted ? 'color: var(--MI_THEME-accent) !important;' : ''"
+					@click.stop="appearNote.isRenoted ? undoRenote() : boostVisibility($event.shiftKey)"
 				>
 					<i class="ph-rocket-launch ph-bold ph-lg"></i>
 					<p v-if="note.renoteCount > 0" :class="$style.noteFooterButtonCount">{{ note.renoteCount }}</p>
@@ -80,21 +84,17 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</div>
 	</div>
 	<template v-if="depth < prefer.s.numberOfReplies">
-		<SkNoteSub v-for="reply in replies" :key="reply.id" :note="reply" :class="[$style.reply, { [$style.single]: replies.length === 1 }]" :detail="true" :depth="depth + 1" :expandAllCws="props.expandAllCws" :onDeleteCallback="removeReply" :isReply="props.isReply"/>
+		<SkNoteSub v-for="reply in replies" :key="reply.id" :note="reply" :class="[$style.reply, { [$style.single]: replies.length === 1 }]" :detail="true" :depth="depth + 1" :expandAllCws="props.expandAllCws" :onDeleteCallback="removeReply" :isReply="props.isReply" @expandMute="n => emit('expandMute', n)"/>
 	</template>
 	<div v-else :class="$style.more">
 		<MkA class="_link" :to="notePage(note)">{{ i18n.ts.continueThread }} <i class="ti ti-chevron-double-right"></i></MkA>
 	</div>
-</div>
-<div v-else :class="$style.muted" @click="muted = false">
-	<SkMutedNote :muted="muted" :note="appearNote"></SkMutedNote>
-</div>
+</SkMutedNote>
 </template>
 
 <script lang="ts" setup>
 import { computed, inject, ref, shallowRef, useTemplateRef, watch } from 'vue';
 import * as Misskey from 'misskey-js';
-import { computeMergedCw } from '@@/js/compute-merged-cw.js';
 import * as config from '@@/js/config.js';
 import type { Ref } from 'vue';
 import type { Visibility } from '@/utility/boost-quote.js';
@@ -110,7 +110,6 @@ import { misskeyApi } from '@/utility/misskey-api.js';
 import { i18n } from '@/i18n.js';
 import { $i } from '@/i.js';
 import { userPage } from '@/filters/user.js';
-import { checkMutes } from '@/utility/check-word-mute.js';
 import { pleaseLogin } from '@/utility/please-login.js';
 import { showMovedDialog } from '@/utility/show-moved-dialog.js';
 import MkRippleEffect from '@/components/MkRippleEffect.vue';
@@ -123,6 +122,8 @@ import { useNoteCapture } from '@/use/use-note-capture.js';
 import SkMutedNote from '@/components/SkMutedNote.vue';
 import { instance, policies } from '@/instance';
 import { getAppearNote } from '@/utility/get-appear-note';
+import { setupNoteViewInterruptors } from '@/plugin.js';
+import { deepClone } from '@/utility/clone.js';
 
 const props = withDefaults(defineProps<{
 	note: Misskey.entities.Note;
@@ -142,7 +143,13 @@ const props = withDefaults(defineProps<{
 	onDeleteCallback: undefined,
 });
 
-const appearNote = computed(() => getAppearNote(props.note));
+const emit = defineEmits<{
+	(ev: 'expandMute', note: Misskey.entities.Note): void;
+}>();
+
+const note = ref(deepClone(props.note));
+
+const appearNote = computed(() => getAppearNote(note.value));
 
 const canRenote = computed(() => ['public', 'home'].includes(appearNote.value.visibility) || appearNote.value.userId === $i?.id);
 const hideLine = computed(() => props.detail);
@@ -151,7 +158,6 @@ const el = shallowRef<HTMLElement>();
 const translation = ref<Misskey.entities.NotesTranslateResponse | false | null>(null);
 const translating = ref(false);
 const isDeleted = ref(false);
-const renoted = ref(false);
 const reactButton = shallowRef<HTMLElement>();
 const clipButton = useTemplateRef('clipButton');
 const renoteButton = shallowRef<HTMLElement>();
@@ -159,12 +165,10 @@ const quoteButton = shallowRef<HTMLElement>();
 const menuButton = shallowRef<HTMLElement>();
 const likeButton = shallowRef<HTMLElement>();
 
-const renoteTooltip = computeRenoteTooltip(renoted);
+const renoteTooltip = computeRenoteTooltip(appearNote);
 
 const defaultLike = computed(() => prefer.s.like ? prefer.s.like : null);
 const replies = ref<Misskey.entities.Note[]>([]);
-
-const mergedCW = computed(() => computeMergedCw(appearNote.value));
 
 const pleaseLoginContext = computed<OpenOnRemoteOptions>(() => ({
 	type: 'lookup',
@@ -173,20 +177,20 @@ const pleaseLoginContext = computed<OpenOnRemoteOptions>(() => ({
 
 const currentClip = inject<Ref<Misskey.entities.Clip> | null>('currentClip', null);
 
+setupNoteViewInterruptors(note, isDeleted);
+
 async function addReplyTo(replyNote: Misskey.entities.Note) {
 	replies.value.unshift(replyNote);
 	appearNote.value.repliesCount += 1;
 }
 
 async function removeReply(id: Misskey.entities.Note['id']) {
-	const replyIdx = replies.value.findIndex(note => note.id === id);
+	const replyIdx = replies.value.findIndex(reply => reply.id === id);
 	if (replyIdx >= 0) {
 		replies.value.splice(replyIdx, 1);
 		appearNote.value.repliesCount -= 1;
 	}
 }
-
-const { muted } = checkMutes(appearNote.value);
 
 useNoteCapture({
 	rootEl: el,
@@ -196,16 +200,6 @@ useNoteCapture({
 	onReplyCallback: props.detail && props.depth < prefer.s.numberOfReplies ? addReplyTo : undefined,
 	onDeleteCallback: props.detail && props.depth < prefer.s.numberOfReplies ? props.onDeleteCallback : undefined,
 });
-
-if ($i) {
-	misskeyApi('notes/renotes', {
-		noteId: appearNote.value.id,
-		userId: $i.id,
-		limit: 1,
-	}).then((res) => {
-		renoted.value = res.length > 0;
-	});
-}
 
 function focus() {
 	el.value?.focus();
@@ -225,8 +219,9 @@ async function reply(viaKeyboard = false): Promise<void> {
 function react(): void {
 	pleaseLogin({ openOnRemote: pleaseLoginContext.value });
 	showMovedDialog();
-	sound.playMisskeySfx('reaction');
 	if (appearNote.value.reactionAcceptance === 'likeOnly') {
+		sound.playMisskeySfx('reaction');
+
 		misskeyApi('notes/like', {
 			noteId: appearNote.value.id,
 			override: defaultLike.value,
@@ -242,7 +237,18 @@ function react(): void {
 		}
 	} else {
 		blur();
-		reactionPicker.show(reactButton.value ?? null, appearNote.value, reaction => {
+		reactionPicker.show(reactButton.value ?? null, note.value, async (reaction) => {
+			if (prefer.s.confirmOnReact) {
+				const confirm = await os.confirm({
+					type: 'question',
+					text: i18n.tsx.reactAreYouSure({ emoji: reaction.replace('@.', '') }),
+				});
+
+				if (confirm.canceled) return;
+			}
+
+			sound.playMisskeySfx('reaction');
+
 			misskeyApi('notes/reactions/create', {
 				noteId: appearNote.value.id,
 				reaction: reaction,
@@ -275,21 +281,21 @@ function like(): void {
 	}
 }
 
-function undoReact(note): void {
-	const oldReaction = note.myReaction;
+function undoReact(targetNote: Misskey.entities.Note): void {
+	const oldReaction = targetNote.myReaction;
 	if (!oldReaction) return;
 	misskeyApi('notes/reactions/delete', {
-		noteId: note.id,
+		noteId: targetNote.id,
 	});
 }
 
 function undoRenote() : void {
-	if (!renoted.value) return;
+	if (!appearNote.value.isRenoted) return;
 	misskeyApi('notes/unrenote', {
 		noteId: appearNote.value.id,
 	});
 	os.toast(i18n.ts.rmboost);
-	renoted.value = false;
+	appearNote.value.isRenoted = false;
 
 	const el = renoteButton.value as HTMLElement | null | undefined;
 	if (el) {
@@ -336,7 +342,7 @@ function renote(visibility: Visibility, localOnly: boolean = false) {
 			channelId: appearNote.value.channelId,
 		}).then(() => {
 			os.toast(i18n.ts.renoted);
-			renoted.value = true;
+			appearNote.value.isRenoted = true;
 		});
 	} else {
 		const el = renoteButton.value as HTMLElement | null | undefined;
@@ -355,7 +361,7 @@ function renote(visibility: Visibility, localOnly: boolean = false) {
 			visibility: visibility,
 		}).then(() => {
 			os.toast(i18n.ts.renoted);
-			renoted.value = true;
+			appearNote.value.isRenoted = true;
 		});
 	}
 }
@@ -603,16 +609,9 @@ if (props.detail) {
 }
 
 .muted {
-	text-align: center;
-	padding: 8px !important;
 	border: 1px solid var(--MI_THEME-divider);
 	margin: 8px 8px 0 8px;
 	border-radius: var(--MI-radius-sm);
-	cursor: pointer;
-}
-
-.muted:hover {
-	background: var(--MI_THEME-buttonBg);
 }
 
 // avatar container with line

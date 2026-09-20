@@ -3,9 +3,12 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-type E = { message: string, code: string, id: string, kind?: 'client' | 'server' | 'permission', httpStatusCode?: number };
+export type E = { message?: string, code?: string, id: string, kind?: 'client' | 'server' | 'permission', httpStatusCode?: number };
 
 export class ApiError extends Error {
+	// Fix the error name in stack traces - https://stackoverflow.com/a/71573071
+	override name = this.constructor.name;
+
 	public message: string;
 	public code: string;
 	public id: string;
@@ -23,8 +26,8 @@ export class ApiError extends Error {
 		};
 
 		super(err.message);
-		this.message = err.message;
-		this.code = err.code;
+		this.message = err.message ?? err.id;
+		this.code = err.code ?? err.id;
 		this.id = err.id;
 		this.kind = err.kind ?? 'client';
 		this.httpStatusCode = err.httpStatusCode;

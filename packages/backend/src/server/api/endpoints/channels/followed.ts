@@ -54,14 +54,24 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private queryService: QueryService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
-			const query = this.queryService.makePaginationQuery(this.channelFollowingsRepository.createQueryBuilder(), ps.sinceId, ps.untilId)
+			const query = this.queryService
+				.makePaginationQuery(
+					this.channelFollowingsRepository.createQueryBuilder('following'),
+					ps.sinceId,
+					ps.untilId,
+					null,
+					null,
+					'followeeId',
+				)
+				.innerJoinAndSelect('following.followee', 'followee')
 				.andWhere({ followerId: me.id });
 
 			const followings = await query
 				.limit(ps.limit)
 				.getMany();
 
-			return await Promise.all(followings.map(x => this.channelEntityService.pack(x.followeeId, me)));
+			const channels = followings.map(f => f.followee ?? f.followeeId);
+			return await this.channelEntityService.packMany(channels, me);
 		});
 	}
 }

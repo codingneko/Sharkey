@@ -43,6 +43,11 @@ export class MiMeta {
 	})
 	public description: string | null;
 
+	@Column('text', {
+		nullable: true,
+	})
+	public about: string | null;
+
 	/**
 	 * メンテナの名前
 	 */
@@ -426,6 +431,12 @@ export class MiMeta {
 		length: 1024,
 		nullable: true,
 	})
+	public listenbrainzAuthKey: string | null;
+
+	@Column('varchar', {
+		length: 1024,
+		nullable: true,
+	})
 	public termsOfServiceUrl: string | null;
 
 	@Column('varchar', {
@@ -624,12 +635,11 @@ export class MiMeta {
 	public robotsTxt: string | null;
 
 	@Column('jsonb', {
-		default: { },
+		default: {},
 	})
 	public policies: Record<string, any>;
 
-	@Column('varchar', {
-		length: 280,
+	@Column('text', {
 		array: true,
 		default: '{}',
 	})
@@ -770,4 +780,20 @@ export class MiMeta {
 		default: false,
 	})
 	public enableProxyAccount: boolean;
+
+	@Column('jsonb', {
+		default: [],
+	})
+	public deliverSuspendedSoftware: SoftwareSuspension[];
+
+	constructor(data?: Partial<MiMeta>) {
+		if (data) {
+			Object.assign(this, data);
+		}
+	}
 }
+
+export type SoftwareSuspension = {
+	software: string,
+	versionRange: string,
+};

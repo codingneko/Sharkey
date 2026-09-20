@@ -15,6 +15,7 @@ import type { DriveFilesRepository, UsersRepository, DriveFoldersRepository, Use
 import type { Config } from '@/config.js';
 import Logger from '@/logger.js';
 import type { MiRemoteUser, MiUser } from '@/models/User.js';
+import { isLocalUser } from '@/models/User.js';
 import { MiDriveFile } from '@/models/DriveFile.js';
 import { IdService } from '@/core/IdService.js';
 import { isDuplicateKeyValueError } from '@/misc/is-duplicate-key-value-error.js';
@@ -44,6 +45,7 @@ import { correctFilename } from '@/misc/correct-filename.js';
 import { isMimeImage } from '@/misc/is-mime-image.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
 import { UtilityService } from '@/core/UtilityService.js';
+import { CacheService } from '@/core/CacheService.js';
 import { BunnyService } from '@/core/BunnyService.js';
 import { renderInlineError } from '@/misc/render-inline-error.js';
 import { LoggerService } from './LoggerService.js';
@@ -58,7 +60,7 @@ type AddFileArgs = {
 	/** Comment */
 	comment?: string | null;
 	/** Folder ID */
-	folderId?: any;
+	folderId?: string | null;
 	/** If set to true, forcibly upload the file even if there is a file with the same hash. */
 	force?: boolean;
 	/** Do not save file to local */
@@ -87,6 +89,7 @@ type UploadFromUrlArgs = {
 	comment?: string | null;
 	requestIp?: string | null;
 	requestHeaders?: Record<string, string> | null;
+	isForImport?: boolean;
 };
 
 @Injectable()
@@ -135,6 +138,7 @@ export class DriveService {
 		private perUserDriveChart: PerUserDriveChart,
 		private instanceChart: InstanceChart,
 		private utilityService: UtilityService,
+		private readonly cacheService: CacheService,
 
 		loggerService: LoggerService,
 	) {
@@ -207,7 +211,7 @@ export class DriveService {
 
 			//#region Uploads
 			this.registerLogger.debug(`uploading original: ${key}`);
-			const uploads = [
+			const uploads: Promise<void>[] = [
 				this.upload(key, fs.createReadStream(path), type, null, name),
 			];
 
@@ -424,10 +428,10 @@ export class DriveService {
 		if (this.meta.objectStorageSetPublicRead) params.ACL = 'public-read';
 
 		try {
-			if (this.bunnyService.usingBunnyCDN(this.meta)) {
-				await this.bunnyService.upload(this.meta, key, stream);
+			if (this.bunnyService.usingBunnyCDN()) {
+				await this.bunnyService.upload(key, stream);
 			} else {
-				const result = await this.s3Service.upload(this.meta, params);
+				const result = await this.s3Service.upload(params);
 				if ('Bucket' in result) { // CompleteMultipartUploadCommandOutput
 					this.registerLogger.debug(`Uploaded: ${result.Bucket}/${result.Key} => ${result.Location}`);
 				} else { // AbortMultipartUploadCommandOutput
@@ -470,7 +474,7 @@ export class DriveService {
 		for (const fileId of exceedFileIds) {
 			const file = await this.driveFilesRepository.findOneBy({ id: fileId });
 			if (file == null) continue;
-			this.deleteFile(file, true);
+			await this.deleteFile(file, true);
 		}
 	}
 
@@ -531,7 +535,7 @@ export class DriveService {
 		//#region Check drive usage
 		if (user && !isLink) {
 			const usage = await this.driveFileEntityService.calcDriveUsageOf(user);
-			const isLocalUser = this.userEntityService.isLocalUser(user);
+			const isLocal = isLocalUser(user);
 
 			const policies = await this.roleService.getUserPolicies(user.id);
 			const driveCapacity = 1024 * 1024 * policies.driveCapacityMb;
@@ -540,7 +544,7 @@ export class DriveService {
 			this.registerLogger.debug(`overrideCap: ${driveCapacity}bytes, usage: ${usage}bytes, u+s: ${usage + info.size}bytes`);
 
 			if (maxFileSize < info.size) {
-				if (isLocalUser) {
+				if (isLocal) {
 					throw new IdentifiableError('f9e4e5f3-4df4-40b5-b400-f236945f7073', 'Max file size exceeded.');
 				} else {
 					// For remote users, throwing an exception will break Activity processing.
@@ -552,10 +556,10 @@ export class DriveService {
 			// If usage limit exceeded
 			// Repeat the "!isLink" check because it could be set to true by the previous block.
 			if (driveCapacity < usage + info.size && !isLink) {
-				if (isLocalUser) {
+				if (isLocal) {
 					throw new IdentifiableError('c6244ed2-a39a-4e1c-bf93-f0fbd7764fa6', 'No free space.', true);
 				}
-				await this.expireOldFile(await this.usersRepository.findOneByOrFail({ id: user.id }) as MiRemoteUser, driveCapacity - info.size);
+				await this.expireOldFile(await this.cacheService.findRemoteUserById(user.id), driveCapacity - info.size);
 			}
 		}
 		//#endregion
@@ -589,7 +593,7 @@ export class DriveService {
 			properties['orientation'] = info.orientation;
 		}
 
-		const profile = user ? await this.userProfilesRepository.findOneBy({ userId: user.id }) : null;
+		const profile = user ? await this.cacheService.userProfileCache.fetchMaybe(user.id) : null;
 
 		const folder = await fetchFolder();
 
@@ -607,7 +611,7 @@ export class DriveService {
 		file.maybeSensitive = info.sensitive;
 		file.maybePorn = info.porn;
 		file.isSensitive = user
-			? this.userEntityService.isLocalUser(user) && (profile!.alwaysMarkNsfw || profile!.defaultSensitive) ? true :
+			? isLocalUser(user) && (profile!.alwaysMarkNsfw || profile!.defaultSensitive) ? true :
 			sensitive ?? false
 			: false;
 
@@ -683,7 +687,7 @@ export class DriveService {
 
 	@bindThis
 	public async updateFile(file: MiDriveFile, values: Partial<MiDriveFile>, updater: MiUser) {
-		const profile = file.userId ? await this.userProfilesRepository.findOneBy({ userId: file.userId }) : null;
+		const profile = file.userId ? await this.cacheService.userProfileCache.fetchMaybe(file.userId) : null;
 		const alwaysMarkNsfw = file.userId ? (await this.roleService.getUserPolicies(file.userId)).alwaysMarkNsfw || (profile !== null && profile!.alwaysMarkNsfw) : false;
 
 		if (values.name != null && !this.driveFileEntityService.validateFileName(values.name)) {
@@ -716,16 +720,16 @@ export class DriveService {
 
 		if (await this.roleService.isModerator(updater) && (file.userId !== updater.id)) {
 			if (values.isSensitive !== undefined && values.isSensitive !== file.isSensitive) {
-				const user = file.userId ? await this.usersRepository.findOneByOrFail({ id: file.userId }) : null;
+				const user = file.userId ? await this.cacheService.findUserById(file.userId) : null;
 				if (values.isSensitive) {
-					this.moderationLogService.log(updater, 'markSensitiveDriveFile', {
+					await this.moderationLogService.log(updater, 'markSensitiveDriveFile', {
 						fileId: file.id,
 						fileUserId: file.userId,
 						fileUserUsername: user?.username ?? null,
 						fileUserHost: user?.host ?? null,
 					});
 				} else {
-					this.moderationLogService.log(updater, 'unmarkSensitiveDriveFile', {
+					await this.moderationLogService.log(updater, 'unmarkSensitiveDriveFile', {
 						fileId: file.id,
 						fileUserId: file.userId,
 						fileUserUsername: user?.username ?? null,
@@ -739,45 +743,23 @@ export class DriveService {
 	}
 
 	@bindThis
-	public async deleteFile(file: MiDriveFile, isExpired = false, deleter?: MiUser) {
-		if (file.storedInternal) {
-			this.internalStorageService.del(file.accessKey!);
-
-			if (file.thumbnailUrl) {
-				this.internalStorageService.del(file.thumbnailAccessKey!);
-			}
-
-			if (file.webpublicUrl) {
-				this.internalStorageService.del(file.webpublicAccessKey!);
-			}
-		} else if (!file.isLink) {
-			this.queueService.createDeleteObjectStorageFileJob(file.accessKey!);
-
-			if (file.thumbnailUrl) {
-				this.queueService.createDeleteObjectStorageFileJob(file.thumbnailAccessKey!);
-			}
-
-			if (file.webpublicUrl) {
-				this.queueService.createDeleteObjectStorageFileJob(file.webpublicAccessKey!);
-			}
-		}
-
-		this.deletePostProcess(file, isExpired, deleter);
+	public async deleteFile(file: MiDriveFile, isExpired = false, deleter?: { id: string }) {
+		await this.queueService.createDeleteFileJob(file.id, isExpired, deleter?.id);
 	}
 
 	@bindThis
-	public async deleteFileSync(file: MiDriveFile, isExpired = false, deleter?: MiUser) {
-		const promises = [];
+	public async deleteFileSync(file: MiDriveFile, isExpired = false, deleter?: { id: string }) {
+		const promises: Promise<void>[] = [];
 
 		if (file.storedInternal) {
-			promises.push(this.internalStorageService.del(file.accessKey!));
+			promises.push(this.deleteLocalFile(file.accessKey!));
 
 			if (file.thumbnailUrl) {
-				promises.push(this.internalStorageService.del(file.thumbnailAccessKey!));
+				promises.push(this.deleteLocalFile(file.thumbnailAccessKey!));
 			}
 
 			if (file.webpublicUrl) {
-				promises.push(this.internalStorageService.del(file.webpublicAccessKey!));
+				promises.push(this.deleteLocalFile(file.webpublicAccessKey!));
 			}
 		} else if (!file.isLink) {
 			promises.push(this.deleteObjectStorageFile(file.accessKey!));
@@ -793,14 +775,14 @@ export class DriveService {
 
 		await Promise.all(promises);
 
-		this.deletePostProcess(file, isExpired, deleter);
+		await this.deletePostProcess(file, isExpired, deleter);
 	}
 
 	@bindThis
-	private async deletePostProcess(file: MiDriveFile, isExpired = false, deleter?: MiUser) {
+	private async deletePostProcess(file: MiDriveFile, isExpired = false, deleter?: { id: string }) {
 		// リモートファイル期限切れ削除後は直リンクにする
 		if (isExpired && file.userHost !== null && file.uri != null) {
-			this.driveFilesRepository.update(file.id, {
+			await this.driveFilesRepository.update(file.id, {
 				isLink: true,
 				url: file.uri,
 				thumbnailUrl: null,
@@ -812,7 +794,7 @@ export class DriveService {
 				webpublicAccessKey: 'webpublic-' + randomUUID(),
 			});
 		} else {
-			this.driveFilesRepository.delete(file.id);
+			await this.driveFilesRepository.delete(file.id);
 		}
 
 		this.driveChart.update(file, false);
@@ -830,8 +812,8 @@ export class DriveService {
 		}
 
 		if (deleter && await this.roleService.isModerator(deleter) && (file.userId !== deleter.id)) {
-			const user = file.userId ? await this.usersRepository.findOneByOrFail({ id: file.userId }) : null;
-			this.moderationLogService.log(deleter, 'deleteDriveFile', {
+			const user = file.userId ? await this.cacheService.findUserById(file.userId) : null;
+			await this.moderationLogService.log(deleter, 'deleteDriveFile', {
 				fileId: file.id,
 				fileUserId: file.userId,
 				fileUserUsername: user?.username ?? null,
@@ -843,21 +825,39 @@ export class DriveService {
 	@bindThis
 	public async deleteObjectStorageFile(key: string) {
 		try {
+			if (this.bunnyService.usingBunnyCDN()) {
+				await this.bunnyService.delete(key);
+				return;
+			}
+
 			const param = {
 				Bucket: this.meta.objectStorageBucket,
 				Key: key,
 			} as DeleteObjectCommandInput;
-			if (this.bunnyService.usingBunnyCDN(this.meta)) {
-				await this.bunnyService.delete(this.meta, key);
-			} else {
-				await this.s3Service.delete(this.meta, param);
-			}
+
+			await this.s3Service.delete(param);
 		} catch (err: any) {
 			if (err.name === 'NoSuchKey') {
 				this.deleteLogger.warn(`The object storage had no such key to delete: ${key}. Skipping this.`);
 				return;
 			} else {
 				throw new Error(`Failed to delete the file from the object storage with the given key: ${key}`, {
+					cause: err,
+				});
+			}
+		}
+	}
+
+	@bindThis
+	public async deleteLocalFile(key: string) {
+		try {
+			await this.internalStorageService.del(key);
+		} catch (err: any) {
+			if (err.code === 'ENOENT') {
+				this.deleteLogger.warn(`The file to delete did not exist: ${key}. Skipping this.`);
+				return;
+			} else {
+				throw new Error(`Failed to delete the file: ${key}`, {
 					cause: err,
 				});
 			}
@@ -876,13 +876,17 @@ export class DriveService {
 		comment = null,
 		requestIp = null,
 		requestHeaders = null,
+		isForImport = false,
 	}: UploadFromUrlArgs): Promise<MiDriveFile> {
 		// Create temp file
 		const [path, cleanup] = await createTemp();
 
 		try {
 			// write content at URL to temp file
-			const { filename: name } = await this.downloadService.downloadUrl(url, path);
+			const { filename: name } = await this.downloadService.downloadUrl(url, path, {
+				operationTimeout: isForImport ? this.config.import?.downloadTimeout : undefined,
+				maxSize: isForImport ? this.config.import?.maxFileSize : undefined,
+			});
 
 			// If the comment is same as the name, skip comment
 			// (image.name is passed in when receiving attachment)

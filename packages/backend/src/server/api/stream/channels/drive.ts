@@ -5,9 +5,8 @@
 
 import { Injectable } from '@nestjs/common';
 import { bindThis } from '@/decorators.js';
-import type { JsonObject } from '@/misc/json-value.js';
-import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
-import Channel, { type MiChannelService } from '../channel.js';
+import type { DriveEventPayload } from '@/core/GlobalEventService.js';
+import { Channel, type MiChannelService } from '../channel.js';
 
 class DriveChannel extends Channel {
 	public readonly chName = 'drive';
@@ -16,13 +15,21 @@ class DriveChannel extends Channel {
 	public static kind = 'read:account';
 
 	@bindThis
-	public async init(params: JsonObject): Promise<boolean> {
+	public async init(): Promise<boolean> {
 		if (!this.user) return false;
 		// Subscribe drive stream
-		this.subscriber.on(`driveStream:${this.user!.id}`, data => {
-			this.send(data);
-		});
+		this.subscriber.on(`driveStream:${this.user.id}`, this.onEvent);
 		return true;
+	}
+
+	@bindThis
+	private onEvent(data: DriveEventPayload) {
+		this.send(data);
+	}
+
+	@bindThis
+	public dispose() {
+		this.subscriber.off(`driveStream:${this.user?.id}`, this.onEvent);
 	}
 }
 

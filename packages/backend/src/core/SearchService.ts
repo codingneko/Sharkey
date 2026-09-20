@@ -34,6 +34,7 @@ type Q =
 	{ op: 'or', qs: Q[] } |
 	{ op: 'not', q: Q };
 
+// Sync with consts.ts and const.ts
 const fileTypes = {
 	image: [
 		'image/webp',
@@ -42,12 +43,20 @@ const fileTypes = {
 		'image/avif',
 		'image/apng',
 		'image/gif',
+		'image/bmp',
+		'image/tiff',
+		'image/x-icon',
 	],
 	video: [
 		'video/mp4',
 		'video/webm',
 		'video/mpeg',
 		'video/x-m4v',
+		'video/ogg',
+		'video/quicktime',
+		'video/3gpp',
+		'video/3gpp2',
+		'video/x-matroska',
 	],
 	audio: [
 		'audio/mpeg',
@@ -58,6 +67,9 @@ const fileTypes = {
 		'audio/opus',
 		'audio/ogg',
 		'audio/x-m4a',
+		'audio/mp4',
+		'audio/x-flac',
+		'audio/vnd.wave',
 		'audio/mod',
 		'audio/s3m',
 		'audio/xm',
@@ -244,10 +256,10 @@ export class SearchService {
 			case 'sqlTsvector': {
 				// ほとんど内容に差がないのでsqlLikeとsqlPgroongaを同じ処理にしている.
 				// 今後の拡張で差が出る用であれば関数を分ける.
-				return this.searchNoteByLike(q, me, opts, pagination);
+				return await this.searchNoteByLike(q, me, opts, pagination);
 			}
 			case 'meilisearch': {
-				return this.searchNoteByMeiliSearch(q, me, opts, pagination);
+				return await this.searchNoteByMeiliSearch(q, me, opts, pagination);
 			}
 			default: {
 				// eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -301,6 +313,8 @@ export class SearchService {
 
 		this.queryService.generateVisibilityQuery(query, me);
 		this.queryService.generateBlockedHostQueryForNote(query);
+		this.queryService.generateSuspendedUserQueryForNote(query);
+		this.queryService.generateSilencedUserQueryForNotes(query, me);
 		if (me) this.queryService.generateMutedUserQueryForNotes(query, me);
 		if (me) this.queryService.generateBlockedUserQueryForNotes(query, me);
 
@@ -358,27 +372,25 @@ export class SearchService {
 			return [];
 		}
 
-		const [
-			userIdsWhoMeMuting,
-			userIdsWhoBlockingMe,
-		] = me
-			? await Promise.all([
-				this.cacheService.userMutingsCache.fetch(me.id),
-				this.cacheService.userBlockedCache.fetch(me.id),
-			])
-			: [new Set<string>(), new Set<string>()];
-
-		const query = this.notesRepository.createQueryBuilder('note');
+		const query = this.notesRepository.createQueryBuilder('note')
+			.innerJoinAndSelect('note.user', 'user')
+			.leftJoinAndSelect('note.reply', 'reply')
+			.leftJoinAndSelect('note.renote', 'renote')
+			.leftJoinAndSelect('reply.user', 'replyUser')
+			.leftJoinAndSelect('renote.user', 'renoteUser');
 
 		query.where('note.id IN (:...noteIds)', { noteIds: res.hits.map(x => x.id) });
 
 		this.queryService.generateBlockedHostQueryForNote(query);
+		this.queryService.generateSuspendedUserQueryForNote(query);
+		this.queryService.generateSilencedUserQueryForNotes(query, me);
 
-		const notes = (await query.getMany()).filter(note => {
-			if (me && isUserRelated(note, userIdsWhoBlockingMe)) return false;
-			if (me && isUserRelated(note, userIdsWhoMeMuting)) return false;
-			return true;
-		});
+		if (me) {
+			this.queryService.generateBlockedUserQueryForNotes(query, me);
+			this.queryService.generateMutedUserQueryForNotes(query, me);
+		}
+
+		const notes = await query.getMany();
 
 		return notes.sort((a, b) => a.id > b.id ? -1 : 1);
 	}

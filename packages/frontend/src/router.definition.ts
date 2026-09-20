@@ -9,6 +9,7 @@ import type { RouteDef } from '@/lib/nirax.js';
 import { $i, iAmModerator } from '@/i.js';
 import MkLoading from '@/pages/_loading_.vue';
 import MkError from '@/pages/_error_.vue';
+import PageTimeline from '@/pages/timeline.vue';
 
 export const page = (loader: AsyncComponentLoader) => defineAsyncComponent({
 	loader: loader,
@@ -21,6 +22,13 @@ function chatPage(...args: Parameters<typeof page>) {
 }
 
 export const ROUTE_DEF = [{
+	name: 'index',
+	path: '/',
+	component: $i ? PageTimeline : page(() => import('@/pages/welcome.vue')),
+}, {
+	path: '/timeline',
+	component: PageTimeline,
+}, {
 	path: '/@:username/pages/:pageName(*)',
 	component: page(() => import('@/pages/page.vue')),
 }, {
@@ -173,6 +181,10 @@ export const ROUTE_DEF = [{
 		name: 'preferences',
 		component: page(() => import('@/pages/settings/custom-css.vue')),
 	}, {
+		path: '/profiles',
+		name: 'profiles',
+		component: page(() => import('@/pages/settings/profiles.vue')),
+	}, {
 		path: '/accounts',
 		name: 'profile',
 		component: page(() => import('@/pages/settings/accounts.vue')),
@@ -190,6 +202,9 @@ export const ROUTE_DEF = [{
 }, {
 	path: '/signup-complete/:code',
 	component: page(() => import('@/pages/signup-complete.vue')),
+}, {
+	path: '/unsubscribe/:user/:token',
+	component: page(() => import('@/pages/unsubscribe.vue')),
 }, {
 	path: '/announcements',
 	component: page(() => import('@/pages/announcements.vue')),
@@ -600,12 +615,9 @@ export const ROUTE_DEF = [{
 	component: page(() => import('@/pages/reversi/game.vue')),
 	loginRequired: false,
 }, {
-	path: '/timeline',
-	component: page(() => import('@/pages/timeline.vue')),
-}, {
-	name: 'index',
-	path: '/',
-	component: $i ? page(() => import('@/pages/timeline.vue')) : page(() => import('@/pages/welcome.vue')),
+	path: '/debug',
+	component: page(() => import('@/pages/debug.vue')),
+	loginRequired: false,
 }, {
 	// テスト用リダイレクト設定。ログイン中ユーザのプロフィールにリダイレクトする
 	path: '/redirect-test',

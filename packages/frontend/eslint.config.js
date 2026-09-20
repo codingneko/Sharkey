@@ -3,9 +3,9 @@ import tsParser from '@typescript-eslint/parser';
 import parser from 'vue-eslint-parser';
 import pluginVue from 'eslint-plugin-vue';
 import pluginMisskey from '@misskey-dev/eslint-plugin';
+import { build as buildLocales } from 'locales';
 import sharedConfig from '../shared/eslint.config.js';
-import localeRule from '../../eslint/locale.js';
-import { build as buildLocales } from '../../locales/index.js';
+import localeRule from '../shared/eslint/locale-eslint-rule.js';
 
 export default [
 	...sharedConfig,
@@ -16,6 +16,7 @@ export default [
 	...pluginVue.configs['flat/recommended'],
 	{
 		files: ['{src,test,js,@types}/**/*.{ts,vue}'],
+		ignores: ['*.*'],
 		plugins: { sharkey: { rules: { locale: localeRule } } },
 		languageOptions: {
 			globals: {
@@ -43,7 +44,7 @@ export default [
 			parserOptions: {
 				extraFileExtensions: ['.vue'],
 				parser: tsParser,
-				project: ['./tsconfig.json'],
+				project: ['tsconfig.vue.json'],
 				sourceType: 'module',
 				tsconfigRootDir: import.meta.dirname,
 			},
@@ -56,7 +57,6 @@ export default [
 			}],
 			// defineExposeが誤検知されてしまう
 			'@typescript-eslint/no-unused-expressions': 'off',
-			'import/consistent-type-specifier-style': ['error', 'prefer-top-level'],
 			// window ... グローバルスコープと衝突し、予期せぬ結果を招くため
 			// e ... error や event など、複数のキーワードの頭文字であり分かりにくいため
 			// close ... window.closeと衝突 or 紛らわしい
@@ -162,23 +162,121 @@ export default [
 				autofix: true,
 			}],
 			'vue/attribute-hyphenation': ['error', 'never'],
+			'import/no-default-export': 'off',
 		},
 	},
 	{
 		files: ['src/**/*.stories.ts'],
 		rules: {
 			'no-restricted-globals': 'off',
-		}
+		},
+	},
+	{
+		files: ['.storybook/**/*.ts', '.storybook/**/*.tsx', '.storybook/**/*.js', '.storybook/**/*.jsx'],
+		rules: {
+			'import/no-default-export': 'off',
+			'no-restricted-globals': 'off',
+		},
+	},
+	{
+		files: ['.storybook/**/*.ts', '.storybook/**/*.tsx', '.storybook/**/*.js', '.storybook/**/*.jsx'],
+		ignores: [
+			'.storybook/changes.ts',
+			'.storybook/main.ts',
+			'.storybook/generate.tsx',
+			'.storybook/preload-locale.ts',
+			'.storybook/preload-theme.ts',
+		],
+		languageOptions: {
+			parserOptions: {
+				parser: tsParser,
+				project: ['tsconfig.vue.storybook.json'],
+				sourceType: 'module',
+				tsconfigRootDir: import.meta.dirname,
+			},
+		},
+		rules: {
+			'import/no-default-export': 'off',
+		},
+	},
+	{
+		files: [
+			'.storybook/changes.ts',
+			'.storybook/main.ts',
+			'.storybook/generate.tsx',
+			'.storybook/preload-locale.ts',
+			'.storybook/preload-theme.ts',
+		],
+		languageOptions: {
+			parserOptions: {
+				parser: tsParser,
+				project: ['.storybook/tsconfig.json'],
+				sourceType: 'module',
+				tsconfigRootDir: import.meta.dirname,
+			},
+		},
+		rules: {
+			'import/no-default-export': 'off',
+		},
+	},
+	{
+		files: ['test/**/*.ts', 'test/**/*.js'],
+		languageOptions: {
+			parserOptions: {
+				parser: tsParser,
+				project: ['test/tsconfig.json'],
+				sourceType: 'module',
+				tsconfigRootDir: import.meta.dirname,
+			},
+		},
+	},
+	{
+		files: [
+			'*.js',
+			'*.ts',
+			'lib/**/*.ts',
+			'lib/**/*.js',
+			'scripts/**/*.ts',
+			'scripts/**/*.js',
+			'scripts/**/*.mjs',
+			'scripts/**/*.cjs',
+		],
+		ignores: [
+			'node_modules',
+			'.storybook',
+			'vue-shims.d.ts',
+			'src',
+			'test',
+			'@types',
+			'assets',
+		],
+		languageOptions: {
+			globals: {
+				...globals.node,
+			},
+			parserOptions: {
+				parser: tsParser,
+				project: ['tsconfig.scripts.json'],
+				sourceType: 'module',
+				tsconfigRootDir: import.meta.dirname,
+			},
+		},
+		rules: {
+			'import/no-default-export': 'off',
+		},
 	},
 	{
 		ignores: [
-			"**/lib/",
-			"**/temp/",
-			"**/built/",
-			"**/coverage/",
-			"**/node_modules/",
-			"**/libopenmpt/",
-			"**/storybook-static/"
-		]
+			'**/lib',
+			'**/temp',
+			'**/built',
+			'**/coverage',
+			'**/node_modules',
+			'**/libopenmpt',
+			'**/storybook-static',
+			'vue-shims.d.ts',
+			'assets',
+			'src/utility/libopenmpt',
+		],
 	},
 ];

@@ -1,6 +1,8 @@
 <!--
 SPDX-FileCopyrightText: marie and other Sharkey contributors
 SPDX-License-Identifier: AGPL-3.0-only
+
+Displays an old version of an edited note.
 -->
 
 <template>
@@ -47,8 +49,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<MkMediaList :mediaList="appearNote.files"/>
 					</div>
 					<MkPoll v-if="appearNote.poll" :noteId="appearNote.id" :poll="appearNote.poll" :local="!appearNote.user.host" :author="appearNote.user" :emojiUrls="appearNote.emojis" :class="$style.poll"/>
-					<SkUrlPreviewGroup :sourceNodes="parsed" :sourceNote="appearNote" :compact="true" :detail="true" :showAsQuote="!appearNote.user.rejectQuotes" :skipNoteIds="selfNoteIds" style="margin-top: 6px;" @click.stop/>
-					<div v-if="appearNote.renote" :class="$style.quote"><MkNoteSimple :note="appearNote.renote" :class="$style.quoteNote"/></div>
+					<div class="_gaps_s" style="margin-top: 6px;" @click.stop>
+						<SkUrlPreviewGroup :sourceNodes="parsed" :sourceNote="appearNote" :compact="true" :detail="true" :showAsQuote="!appearNote.user.rejectQuotes" :skipNoteIds="selfNoteIds"/>
+					</div>
+					<div v-if="appearNote.renote" :class="$style.quote"><MkNoteSimple :note="appearNote.renote" :class="$style.quoteNote" :skipMute="true"/></div>
 				</div>
 				<MkA v-if="appearNote.channel && !inChannel" :class="$style.channel" :to="`/channels/${appearNote.channel.id}`"><i class="ph-television ph-bold ph-lg"></i> {{ appearNote.channel.name }}</MkA>
 			</div>

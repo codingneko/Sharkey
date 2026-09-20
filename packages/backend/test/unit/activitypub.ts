@@ -2,21 +2,33 @@
  * SPDX-FileCopyrightText: syuilo and misskey-project
  * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 process.env.NODE_ENV = 'test';
 
 import * as assert from 'assert';
 import { generateKeyPair } from 'crypto';
-import { Test } from '@nestjs/testing';
+import { Test, TestingModule } from '@nestjs/testing';
 import { jest } from '@jest/globals';
-
-import { NoOpCacheService } from '../misc/noOpCaches.js';
-import { FakeInternalEventService } from '../misc/FakeInternalEventService.js';
+import { MockApResolverService } from '../misc/MockApResolverService.js';
+import { MockConsole } from '../misc/MockConsole.js';
+import { FakeQueueService } from '../misc/FakeQueueService.js';
 import { MockResolver } from '../misc/mock-resolver.js';
 import type { Config } from '@/config.js';
-import type { MiLocalUser, MiRemoteUser } from '@/models/User.js';
+import type {
+	MiMeta,
+	UserProfilesRepository,
+	UserPublickeysRepository,
+	UserKeypairsRepository,
+	UsersRepository,
+	NotesRepository,
+	UserNotePiningsRepository,
+	MetasRepository,
+} from '@/models/_.js';
 import type { IActor, IApDocument, ICollection, IObject, IPost } from '@/core/activitypub/type.js';
-import { InternalEventService } from '@/core/InternalEventService.js';
-import { CacheService } from '@/core/CacheService.js';
+import { MiUser, type MiLocalUser, type MiRemoteUser } from '@/models/User.js';
+import { MiUserKeypair } from '@/models/UserKeypair.js';
+import { MiNote } from '@/models/Note.js';
+import { QueueService } from '@/core/QueueService.js';
 import { ApImageService } from '@/core/activitypub/models/ApImageService.js';
 import { ApNoteService } from '@/core/activitypub/models/ApNoteService.js';
 import { ApPersonService } from '@/core/activitypub/models/ApPersonService.js';
@@ -25,16 +37,13 @@ import { JsonLdService } from '@/core/activitypub/JsonLdService.js';
 import { CONTEXT } from '@/core/activitypub/misc/contexts.js';
 import { GlobalModule } from '@/GlobalModule.js';
 import { CoreModule } from '@/core/CoreModule.js';
-import { FederatedInstanceService } from '@/core/FederatedInstanceService.js';
-import { LoggerService } from '@/core/LoggerService.js';
-import { MiMeta, MiNote, MiUser, MiUserKeypair, UserProfilesRepository, UserPublickeysRepository } from '@/models/_.js';
+import { CacheManagementService } from '@/global/CacheManagementService.js';
+import { ApResolverService } from '@/core/activitypub/ApResolverService.js';
 import { DI } from '@/di-symbols.js';
 import { secureRndstr } from '@/misc/secure-rndstr.js';
 import { DownloadService } from '@/core/DownloadService.js';
 import { genAidx } from '@/misc/id/aidx.js';
 import { IdService } from '@/core/IdService.js';
-import { UserKeypairService } from '@/core/UserKeypairService.js';
-import { MemoryKVCache } from '@/misc/cache.js';
 
 const host = 'https://host1.test';
 
@@ -77,7 +86,7 @@ function createRandomFeaturedCollection(actor: NonTransientIActor, length: numbe
 	return {
 		'@context': 'https://www.w3.org/ns/activitystreams',
 		type: 'Collection',
-		id: actor.outbox as string,
+		id: actor.featured as string | null ?? `${actor.id}/featured`,
 		totalItems: items.length,
 		items,
 	};
@@ -94,6 +103,7 @@ async function createRandomRemoteUser(
 }
 
 describe('ActivityPub', () => {
+	let app: TestingModule;
 	let userProfilesRepository: UserProfilesRepository;
 	let imageService: ApImageService;
 	let noteService: ApNoteService;
@@ -103,28 +113,23 @@ describe('ActivityPub', () => {
 	let resolver: MockResolver;
 	let idService: IdService;
 	let userPublickeysRepository: UserPublickeysRepository;
-	let userKeypairService: UserKeypairService;
+	let userKeypairsRepository: UserKeypairsRepository;
+	let usersRepository: UsersRepository;
 	let config: Config;
+	let cacheManagementService: CacheManagementService;
+	let mockConsole: MockConsole;
+	let notesRepository: NotesRepository;
+	let userNotePiningsRepository: UserNotePiningsRepository;
 
-	const metaInitial = {
-		id: 'x',
+	// This extends metaInitial, which extends the database-default meta
+	let meta: MiMeta;
+
+	// This extends the database-default meta
+	const metaInitial: Partial<MiMeta> = {
 		name: 'Test Instance',
 		shortName: 'Test Instance',
 		description: 'Test Instance',
-		langs: [] as string[],
-		pinnedUsers: [] as string[],
-		hiddenTags: [] as string[],
-		prohibitedWordsForNameOfUser: [] as string[],
-		silencedHosts: [] as string[],
-		mediaSilencedHosts: [] as string[],
-		policies: {},
-		serverRules: [] as string[],
-		bannedEmailDomains: [] as string[],
-		preservedUsernames: [] as string[],
-		bubbleInstances: [] as string[],
-		trustedLinkUrlPatterns: [] as string[],
 		federation: 'all',
-		federationHosts: [] as string[],
 		allowUnsignedFetch: 'always',
 		cacheRemoteFiles: true,
 		cacheRemoteSensitiveFiles: true,
@@ -133,21 +138,28 @@ describe('ActivityPub', () => {
 		perUserHomeTimelineCacheMax: 800,
 		perLocalUserUserTimelineCacheMax: 800,
 		perRemoteUserUserTimelineCacheMax: 800,
-		blockedHosts: [] as string[],
-		sensitiveWords: [] as string[],
-		prohibitedWords: [] as string[],
-	} as MiMeta;
-	const meta = { ...metaInitial };
+	};
+
+	function resetMeta() {
+		// Delete any new keys
+		for (const key of Reflect.ownKeys(meta)) {
+			if (!Object.hasOwn(metaInitial, key)) {
+				delete meta[key];
+			}
+		}
+
+		// Restore any deleted or modified keys
+		for (const key of Reflect.ownKeys(metaInitial)) {
+			meta[key] = metaInitial[key];
+		}
+	}
 
 	function updateMeta(newMeta: Partial<MiMeta>): void {
-		for (const key in meta) {
-			delete (meta as any)[key];
-		}
 		Object.assign(meta, newMeta);
 	}
 
 	beforeAll(async () => {
-		const app = await Test.createTestingModule({
+		app = await Test.createTestingModule({
 			imports: [GlobalModule, CoreModule],
 		})
 			.overrideProvider(DownloadService).useValue({
@@ -157,9 +169,23 @@ describe('ActivityPub', () => {
 					};
 				},
 			})
-			.overrideProvider(DI.meta).useFactory({ factory: () => meta })
-			.overrideProvider(CacheService).useClass(NoOpCacheService)
-			.overrideProvider(InternalEventService).useClass(FakeInternalEventService)
+			.overrideProvider(DI.meta).useFactory({
+				inject: [DI.metasRepository],
+				factory: async (metasRepository: MetasRepository) => {
+					// Upsert a default meta entity to get all the SQL defaults
+					let defaultMeta = await metasRepository.findOneBy({});
+					if (!defaultMeta) {
+						await metasRepository.insert({ id: 'x' });
+						defaultMeta = await metasRepository.findOneByOrFail({});
+					}
+
+					// Extend the actual entity so we can modify it
+					return Object.create(defaultMeta);
+				},
+			})
+			.overrideProvider(ApResolverService).useClass(MockApResolverService)
+			.overrideProvider(DI.console).useClass(MockConsole)
+			.overrideProvider(QueueService).useClass(FakeQueueService)
 			.compile();
 
 		await app.init();
@@ -172,19 +198,36 @@ describe('ActivityPub', () => {
 		rendererService = app.get<ApRendererService>(ApRendererService);
 		imageService = app.get<ApImageService>(ApImageService);
 		jsonLdService = app.get<JsonLdService>(JsonLdService);
-		resolver = new MockResolver(await app.resolve<LoggerService>(LoggerService));
+		resolver = app.get<MockApResolverService>(ApResolverService).resolver;
 		idService = app.get<IdService>(IdService);
 		userPublickeysRepository = app.get<UserPublickeysRepository>(DI.userPublickeysRepository);
-		userKeypairService = app.get<UserKeypairService>(UserKeypairService);
+		userKeypairsRepository = app.get<UserKeypairsRepository>(DI.userKeypairsRepository);
+		usersRepository = app.get<UsersRepository>(DI.usersRepository);
 		config = app.get<Config>(DI.config);
-
-		// Prevent ApPersonService from fetching instance, as it causes Jest import-after-test error
-		const federatedInstanceService = app.get<FederatedInstanceService>(FederatedInstanceService);
-		jest.spyOn(federatedInstanceService, 'fetch').mockImplementation(() => new Promise(() => { }));
+		cacheManagementService = app.get(CacheManagementService);
+		mockConsole = app.get<MockConsole>(DI.console);
+		notesRepository = app.get<NotesRepository>(DI.notesRepository);
+		userNotePiningsRepository = app.get<UserNotePiningsRepository>(DI.userNotePiningsRepository);
+		meta = app.get<MiMeta>(DI.meta);
 	});
 
-	beforeEach(() => {
+	afterAll(async () => {
+		await app.close();
+	});
+
+	beforeEach(async () => {
+		// This will cascade-delete everything else
+		await usersRepository.deleteAll();
+
+		// Clear all caches app-wide
+		await cacheManagementService.clear();
+
+		// Reset mocks
+		mockConsole.mockReset();
 		resolver.clear();
+
+		// Reset meta to revert the effects of updateMeta()
+		resetMeta();
 	});
 
 	describe('Parse minimum object', () => {
@@ -204,6 +247,7 @@ describe('ActivityPub', () => {
 
 			const user = await personService.createPerson(actor.id, resolver);
 
+			mockConsole.assertNoErrors();
 			assert.deepStrictEqual(user.uri, actor.id);
 			assert.deepStrictEqual(user.username, actor.preferredUsername);
 			assert.deepStrictEqual(user.inbox, actor.inbox);
@@ -215,6 +259,7 @@ describe('ActivityPub', () => {
 
 			const note = await noteService.createNote(post.id, undefined, resolver, true);
 
+			mockConsole.assertNoErrors();
 			assert.deepStrictEqual(note?.uri, post.id);
 			assert.deepStrictEqual(note.visibility, 'public');
 			assert.deepStrictEqual(note.text, post.content);
@@ -250,30 +295,45 @@ describe('ActivityPub', () => {
 	});
 
 	describe('Collection visibility', () => {
-		test('Public following/followers', async () => {
-			const actor = createRandomActor();
-			actor.following = {
-				id: `${actor.id}/following`,
-				type: 'OrderedCollection',
-				totalItems: 0,
-				first: `${actor.id}/following?page=1`,
+		function createPublicTest(inline: boolean) {
+			return async () => {
+				const actor = createRandomActor();
+				const following = {
+					id: `${actor.id}/following`,
+					type: 'OrderedCollection',
+					totalItems: 0,
+					first: `${actor.id}/following?page=1`,
+				} as const;
+				const followers = {
+					id: `${actor.id}/followers`,
+					type: 'OrderedCollection',
+					totalItems: 0,
+					first: `${actor.id}/followers?page=1`,
+				} as const;
+
+				if (inline) {
+					actor.following = following;
+					actor.followers = followers;
+				} else {
+					actor.following = following.id;
+					actor.followers = followers.id;
+				}
+
+				resolver.register(actor.id, actor);
+				resolver.register(following.id, following);
+				resolver.register(followers.id, followers);
+
+				const user = await personService.createPerson(actor.id, resolver);
+				const userProfile = await userProfilesRepository.findOneByOrFail({ userId: user.id });
+
+				mockConsole.assertNoErrors();
+				assert.deepStrictEqual(userProfile.followingVisibility, 'public');
+				assert.deepStrictEqual(userProfile.followersVisibility, 'public');
 			};
-			actor.followers = `${actor.id}/followers`;
+		}
 
-			resolver.register(actor.id, actor);
-			resolver.register(actor.followers, {
-				id: actor.followers,
-				type: 'OrderedCollection',
-				totalItems: 0,
-				first: `${actor.followers}?page=1`,
-			});
-
-			const user = await personService.createPerson(actor.id, resolver);
-			const userProfile = await userProfilesRepository.findOneByOrFail({ userId: user.id });
-
-			assert.deepStrictEqual(userProfile.followingVisibility, 'public');
-			assert.deepStrictEqual(userProfile.followersVisibility, 'public');
-		});
+		test('Public following/followers (URI)', createPublicTest(false));
+		test('Public following/followers (inline)', createPublicTest(true));
 
 		test('Private following/followers', async () => {
 			const actor = createRandomActor();
@@ -327,6 +387,8 @@ describe('ActivityPub', () => {
 				assert.strictEqual(note.text, 'test test foo');
 				assert.strictEqual(note.uri, item.id);
 			}
+
+			mockConsole.assertNoErrors();
 		});
 
 		test('Fetch featured notes from IActor pointing to another remote server', async () => {
@@ -346,7 +408,7 @@ describe('ActivityPub', () => {
 			resolver.register(actor2.id, actor2);
 			resolver.register(actor2Note.id, actor2Note);
 
-			await personService.createPerson(actor1.id, resolver);
+			const created = await personService.createPerson(actor1.id, resolver);
 
 			// actor2Note is from a different server and needs to be fetched again
 			assert.deepStrictEqual(
@@ -360,6 +422,10 @@ describe('ActivityPub', () => {
 			// Reflects the original content instead of the fraud
 			assert.strictEqual(note.text, 'test test foo');
 			assert.strictEqual(note.uri, actor2Note.id);
+
+			// Cross-user pin should be rejected
+			const pinExists = await userNotePiningsRepository.existsBy({ userId: created.id, noteId: note.id });
+			expect(pinExists).toBe(false);
 		});
 
 		test('Fetch a note that is a featured note of the attributed actor', async () => {
@@ -407,7 +473,7 @@ describe('ActivityPub', () => {
 		});
 
 		test('cacheRemoteFiles=false disables caching', async () => {
-			updateMeta({ ...metaInitial, cacheRemoteFiles: false });
+			updateMeta({ cacheRemoteFiles: false });
 
 			const imageObject: IApDocument = {
 				type: 'Document',
@@ -436,7 +502,7 @@ describe('ActivityPub', () => {
 		});
 
 		test('cacheRemoteSensitiveFiles=false only affects sensitive files', async () => {
-			updateMeta({ ...metaInitial, cacheRemoteSensitiveFiles: false });
+			updateMeta({ cacheRemoteSensitiveFiles: false });
 
 			const imageObject: IApDocument = {
 				type: 'Document',
@@ -528,15 +594,15 @@ describe('ActivityPub', () => {
 				name: 'Test Author',
 				isCat: true,
 				requireSigninToViewContents: true,
-				makeNotesFollowersOnlyBefore: new Date(2025, 2, 20).valueOf(),
-				makeNotesHiddenBefore: new Date(2025, 2, 21).valueOf(),
+				makeNotesFollowersOnlyBefore: new Date(2025, 2, 20).valueOf() / 1000,
+				makeNotesHiddenBefore: new Date(2025, 2, 21).valueOf() / 1000,
 				isLocked: true,
 				isExplorable: true,
 				hideOnlineStatus: true,
 				noindex: true,
 				enableRss: true,
-
 			}) as MiLocalUser;
+			await usersRepository.insert(author);
 
 			const [publicKey, privateKey] = await new Promise<[string, string]>((res, rej) =>
 				generateKeyPair('rsa', {
@@ -560,7 +626,7 @@ describe('ActivityPub', () => {
 				publicKey,
 				privateKey,
 			});
-			(userKeypairService as unknown as { cache: MemoryKVCache<MiUserKeypair> }).cache.set(author.id, keypair);
+			await userKeypairsRepository.insert(keypair);
 
 			note = new MiNote({
 				id: idService.gen(),
@@ -585,6 +651,7 @@ describe('ActivityPub', () => {
 				tags: [],
 				hasPoll: false,
 			});
+			await notesRepository.insert(note);
 		});
 
 		describe('renderNote', () => {
@@ -682,10 +749,10 @@ describe('ActivityPub', () => {
 				expect(result.id).toBeTruthy();
 				expect(result.inbox).toBeTruthy();
 				expect(result.sharedInbox).toBeTruthy();
-				expect(result.endpoints.sharedInbox).toBeTruthy();
+				expect(result.endpoints?.sharedInbox).toBeTruthy();
 				expect(result.url).toBeTruthy();
 				expect(result.preferredUsername).toBe(author.username);
-				expect(result.publicKey.owner).toBe(result.id);
+				expect(result.publicKey?.owner).toBe(result.id);
 				expect(result._misskey_requireSigninToViewContents).toBe(author.requireSigninToViewContents);
 				expect(result._misskey_makeNotesFollowersOnlyBefore).toBe(author.makeNotesFollowersOnlyBefore);
 				expect(result._misskey_makeNotesHiddenBefore).toBe(author.makeNotesHiddenBefore);
@@ -813,6 +880,7 @@ describe('ActivityPub', () => {
 			it('should trim publicKey', async () => {
 				const actor = createRandomActor();
 				actor.publicKey = {
+					type: 'Key',
 					id: `${actor.id}#main-key`,
 					publicKeyPem: '  key material\t\n\r\n \n',
 				};
@@ -823,6 +891,7 @@ describe('ActivityPub', () => {
 
 				expect(publicKey).not.toBeNull();
 				expect(publicKey?.keyPem).toBe('key material');
+				mockConsole.assertNoErrors();
 			});
 
 			it('should accept SocialHome actor', async () => {
@@ -871,6 +940,7 @@ describe('ActivityPub', () => {
 
 				expect(user.uri).toBe(actor.id);
 				expect(publicKey).not.toBeNull();
+				mockConsole.assertNoErrors();
 			});
 		});
 	});

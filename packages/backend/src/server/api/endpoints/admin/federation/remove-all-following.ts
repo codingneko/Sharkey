@@ -8,6 +8,7 @@ import { Endpoint } from '@/server/api/endpoint-base.js';
 import type { FollowingsRepository, UsersRepository } from '@/models/_.js';
 import { DI } from '@/di-symbols.js';
 import { QueueService } from '@/core/QueueService.js';
+import { CacheService } from '@/core/CacheService.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
 
 export const meta = {
@@ -37,6 +38,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 		private queueService: QueueService,
 		private readonly moderationLogService: ModerationLogService,
+		private readonly cacheService: CacheService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			const followings = await this.followingsRepository.findBy([
@@ -48,16 +50,25 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				},
 			]);
 
-			const pairs = await Promise.all(followings.map(f => Promise.all([
-				this.usersRepository.findOneByOrFail({ id: f.followerId }),
-				this.usersRepository.findOneByOrFail({ id: f.followeeId }),
-			]).then(([from, to]) => [{ id: from.id }, { id: to.id }])));
+			const userIds = followings.flatMap(f => [f.followerId, f.followeeId]);
+			const users = await this.cacheService.findUsersById(userIds);
+			const pairs = followings
+				.map(f => {
+					const from = users.get(f.followerId);
+					const to = users.get(f.followeeId);
+					if (!from || !to) {
+						return null;
+					}
+
+					return [{ id: from.id }, { id: to.id }];
+				})
+				.filter(pair => pair != null);
 
 			await this.moderationLogService.log(me, 'severFollowRelations', {
 				host: ps.host,
 			});
 
-			this.queueService.createUnfollowJob(pairs.map(p => ({ from: p[0], to: p[1], silent: true })));
+			await this.queueService.createUnfollowJob(pairs.map(p => ({ from: p[0], to: p[1], silent: true })));
 		});
 	}
 }

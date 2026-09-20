@@ -52,7 +52,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				userId: me.id,
 			});
 
-			return await Promise.all(antennas.map(x => this.antennaEntityService.pack(x)));
+			return await this.antennaEntityService.packMany(antennas);
 		});
 	}
 }

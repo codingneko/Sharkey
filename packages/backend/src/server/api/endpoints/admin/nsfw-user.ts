@@ -9,6 +9,7 @@ import type { UserProfilesRepository } from '@/models/_.js';
 import { DI } from '@/di-symbols.js';
 import { CacheService } from '@/core/CacheService.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
+import { InternalEventService } from '@/global/InternalEventService.js';
 
 export const meta = {
 	tags: ['admin'],
@@ -33,21 +34,26 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private readonly userProfilesRepository: UserProfilesRepository,
 		private readonly moderationLogService: ModerationLogService,
 		private readonly cacheService: CacheService,
+		private readonly internalEventService: InternalEventService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
+			const profile = await this.cacheService.userProfileCache.fetch(ps.userId);
+
+			if (profile.alwaysMarkNsfw) return;
+
 			const user = await this.cacheService.findUserById(ps.userId);
+
+			await this.userProfilesRepository.update(user.id, {
+				alwaysMarkNsfw: true,
+			});
+
+			await this.internalEventService.emit('updateUserProfile', { userId: ps.userId, keys: ['alwaysMarkNsfw'] });
 
 			await this.moderationLogService.log(me, 'nsfwUser', {
 				userId: ps.userId,
 				userUsername: user.username,
 				userHost: user.host,
 			});
-
-			await this.userProfilesRepository.update(user.id, {
-				alwaysMarkNsfw: true,
-			});
-
-			await this.cacheService.userProfileCache.delete(ps.userId);
 		});
 	}
 }

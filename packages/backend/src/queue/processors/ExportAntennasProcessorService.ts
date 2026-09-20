@@ -15,8 +15,10 @@ import { bindThis } from '@/decorators.js';
 import { createTemp } from '@/misc/create-temp.js';
 import { UtilityService } from '@/core/UtilityService.js';
 import { NotificationService } from '@/core/NotificationService.js';
+import { CacheService } from '@/core/CacheService.js';
+import { TimeService } from '@/global/TimeService.js';
 import { QueueLoggerService } from '../QueueLoggerService.js';
-import type { DBExportAntennasData } from '../types.js';
+import type { DbExportAntennasJobData } from '../types.js';
 import type * as Bull from 'bullmq';
 
 @Injectable()
@@ -37,12 +39,14 @@ export class ExportAntennasProcessorService {
 		private utilityService: UtilityService,
 		private queueLoggerService: QueueLoggerService,
 		private notificationService: NotificationService,
+		private readonly timeService: TimeService,
+		private readonly cacheService: CacheService,
 	) {
 		this.logger = this.queueLoggerService.logger.createSubLogger('export-antennas');
 	}
 
 	@bindThis
-	public async process(job: Bull.Job<DBExportAntennasData>): Promise<void> {
+	public async process(job: Bull.Job<DbExportAntennasJobData>): Promise<void> {
 		const user = await this.usersRepository.findOneBy({ id: job.data.user.id });
 		if (user == null) {
 			this.logger.debug(`Skip: user ${job.data.user.id} does not exist`);
@@ -72,9 +76,7 @@ export class ExportAntennasProcessorService {
 				let users: MiUser[] | undefined;
 				if (antenna.userListId !== null) {
 					const memberships = await this.userListMembershipsRepository.findBy({ userListId: antenna.userListId });
-					users = await this.usersRepository.findBy({
-						id: In(memberships.map(j => j.userId)),
-					});
+					users = (await this.cacheService.findUsersById(memberships.map(j => j.userId))).values().toArray();
 				}
 				write(JSON.stringify({
 					name: antenna.name,
@@ -98,7 +100,7 @@ export class ExportAntennasProcessorService {
 			write(']');
 			stream.end();
 
-			const fileName = 'antennas-' + DateFormat(new Date(), 'yyyy-MM-dd-HH-mm-ss') + '.json';
+			const fileName = 'antennas-' + DateFormat(this.timeService.date, 'yyyy-MM-dd-HH-mm-ss') + '.json';
 			const driveFile = await this.driveService.addFile({ user, path, name: fileName, force: true, ext: 'json' });
 			this.logger.debug('Exported to: ' + driveFile.id);
 

@@ -8,54 +8,42 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { Response } from 'node-fetch';
 import {
 	CaptchaError,
-	CaptchaErrorCode,
-	captchaErrorCodes,
 	CaptchaSaveResult,
 	CaptchaService,
 } from '@/core/CaptchaService.js';
 import { GlobalModule } from '@/GlobalModule.js';
 import { HttpRequestService } from '@/core/HttpRequestService.js';
-import { MetaService } from '@/core/MetaService.js';
 import { MiMeta } from '@/models/Meta.js';
-import { LoggerService } from '@/core/LoggerService.js';
+import { CoreModule } from '@/core/CoreModule.js';
+import { captchaErrorCodes, type CaptchaErrorCode } from '@/misc/captcha-error.js';
+import { DI } from '@/di-symbols.js';
 
 describe('CaptchaService', () => {
 	let app: TestingModule;
 	let service: CaptchaService;
 	let httpRequestService: jest.Mocked<HttpRequestService>;
-	let metaService: jest.Mocked<MetaService>;
+	let meta: MiMeta;
 
 	beforeAll(async () => {
 		app = await Test.createTestingModule({
 			imports: [
 				GlobalModule,
+				CoreModule,
 			],
-			providers: [
-				CaptchaService,
-				LoggerService,
-				{
-					provide: HttpRequestService, useFactory: () => ({ send: jest.fn() }),
-				},
-				{
-					provide: MetaService, useFactory: () => ({
-						fetch: jest.fn(),
-						update: jest.fn(),
-					}),
-				},
-			],
-		}).compile();
+		})
+			.overrideProvider(HttpRequestService).useValue({ send: jest.fn() })
+			.compile();
 
+		await app.init();
 		app.enableShutdownHooks();
 
 		service = app.get(CaptchaService);
 		httpRequestService = app.get(HttpRequestService) as jest.Mocked<HttpRequestService>;
-		metaService = app.get(MetaService) as jest.Mocked<MetaService>;
+		meta = app.get<MiMeta>(DI.meta);
 	});
 
 	beforeEach(() => {
 		httpRequestService.send.mockClear();
-		metaService.update.mockClear();
-		metaService.fetch.mockClear();
 	});
 
 	afterAll(async () => {
@@ -198,8 +186,8 @@ describe('CaptchaService', () => {
 	});
 
 	describe('get', () => {
-		function setupMeta(meta: Partial<MiMeta>) {
-			metaService.fetch.mockResolvedValue(meta as MiMeta);
+		function setupMeta(updates: Partial<MiMeta>) {
+			Object.assign(meta, updates);
 		}
 
 		test('values', async () => {
@@ -337,8 +325,8 @@ describe('CaptchaService', () => {
 				await expect(promise)
 					.resolves
 					.toStrictEqual({ success: true });
-				const partialParams = metaService.update.mock.calls[0][0];
-				expect(partialParams).toStrictEqual(expectMeta);
+
+				expect(meta).toMatchObject(expectMeta);
 			}
 
 			test('none', async () => {
@@ -458,12 +446,15 @@ describe('CaptchaService', () => {
 
 		describe('[failure] 検証に失敗した場合は保存できない＋設定値の更新そのものが発生しない', () => {
 			async function assertFailure(code: CaptchaErrorCode, promise: Promise<CaptchaSaveResult>) {
+				const before = Object.assign({}, meta);
+
 				const res = await promise;
 				expect(res.success).toBe(false);
 				if (!res.success) {
 					expect(res.error.code).toBe(code);
 				}
-				expect(metaService.update).not.toBeCalled();
+
+				expect(meta).toEqual(before);
 			}
 
 			describe('invalidParameters', () => {

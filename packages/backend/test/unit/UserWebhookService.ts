@@ -6,6 +6,8 @@
 import { afterEach, beforeEach, describe, expect, jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
 import { randomString } from '../utils.js';
+import { FakeQueueService } from '../misc/FakeQueueService.js';
+import type { Queues } from '@/queue/types.js';
 import { MiUser } from '@/models/User.js';
 import { MiWebhook, UsersRepository, WebhooksRepository } from '@/models/_.js';
 import { IdService } from '@/core/IdService.js';
@@ -15,6 +17,8 @@ import { DI } from '@/di-symbols.js';
 import { QueueService } from '@/core/QueueService.js';
 import { LoggerService } from '@/core/LoggerService.js';
 import { UserWebhookService } from '@/core/UserWebhookService.js';
+import { CacheManagementService } from '@/global/CacheManagementService.js';
+import { CoreModule } from '@/core/CoreModule.js';
 
 describe('UserWebhookService', () => {
 	let app: TestingModule;
@@ -25,7 +29,8 @@ describe('UserWebhookService', () => {
 	let usersRepository: UsersRepository;
 	let userWebhooksRepository: WebhooksRepository;
 	let idService: IdService;
-	let queueService: jest.Mocked<QueueService>;
+	let cacheManagementService: CacheManagementService;
+	let userWebhookDeliverQueue: Queues['userWebhookDeliver'];
 
 	// --------------------------------------------------------------------------------------
 
@@ -58,55 +63,49 @@ describe('UserWebhookService', () => {
 
 	// --------------------------------------------------------------------------------------
 
-	async function beforeAllImpl() {
+	beforeAll(async () => {
 		app = await Test
 			.createTestingModule({
 				imports: [
 					GlobalModule,
-				],
-				providers: [
-					UserWebhookService,
-					IdService,
-					LoggerService,
-					GlobalEventService,
-					{
-						provide: QueueService, useFactory: () => ({ userWebhookDeliver: jest.fn() }),
-					},
+					CoreModule,
 				],
 			})
+			.overrideProvider(QueueService).useClass(FakeQueueService)
 			.compile();
+
+		await app.init();
+		app.enableShutdownHooks();
 
 		usersRepository = app.get(DI.usersRepository);
 		userWebhooksRepository = app.get(DI.webhooksRepository);
 
 		service = app.get(UserWebhookService);
 		idService = app.get(IdService);
-		queueService = app.get(QueueService) as jest.Mocked<QueueService>;
+		cacheManagementService = app.get(CacheManagementService);
+		userWebhookDeliverQueue = app.get<Queues['userWebhookDeliver']>('queue:userWebhookDeliver');
 
-		app.enableShutdownHooks();
-	}
+		await userWebhookDeliverQueue.drain(true);
+	});
 
-	async function afterAllImpl() {
+	afterAll(async () => {
 		await app.close();
-	}
+	});
 
-	async function beforeEachImpl() {
+	beforeEach(async () => {
 		root = await createUser({ username: 'root', usernameLower: 'root' });
-	}
+	});
 
-	async function afterEachImpl() {
-		await usersRepository.delete({});
-		await userWebhooksRepository.delete({});
-	}
+	afterEach(async () => {
+		await usersRepository.deleteAll();
+		await userWebhooksRepository.deleteAll();
+		await userWebhookDeliverQueue.drain(true);
+		await cacheManagementService.clear();
+	});
 
 	// --------------------------------------------------------------------------------------
 
 	describe('アプリを毎回作り直す必要のないグループ', () => {
-		beforeAll(beforeAllImpl);
-		afterAll(afterAllImpl);
-		beforeEach(beforeEachImpl);
-		afterEach(afterEachImpl);
-
 		describe('fetchSystemWebhooks', () => {
 			test('フィルタなし', async () => {
 				const webhook1 = await createWebhook({
@@ -243,16 +242,6 @@ describe('UserWebhookService', () => {
 	});
 
 	describe('アプリを毎回作り直す必要があるグループ', () => {
-		beforeEach(async () => {
-			await beforeAllImpl();
-			await beforeEachImpl();
-		});
-
-		afterEach(async () => {
-			await afterEachImpl();
-			await afterAllImpl();
-		});
-
 		describe('enqueueUserWebhook', () => {
 			test('キューに追加成功', async () => {
 				const webhook = await createWebhook({
@@ -261,8 +250,9 @@ describe('UserWebhookService', () => {
 				});
 				await service.enqueueUserWebhook(webhook.userId, 'note', { foo: 'bar' } as any);
 
-				expect(queueService.userWebhookDeliver).toHaveBeenCalledTimes(1);
-				expect(queueService.userWebhookDeliver.mock.calls[0][0] as MiWebhook).toEqual(webhook);
+				const jobs = await userWebhookDeliverQueue.getJobs();
+				expect(jobs.length).toBe(1);
+				expect(jobs[0].data.webhookId).toBe(webhook.id);
 			});
 
 			test('非アクティブなWebhookはキューに追加されない', async () => {
@@ -272,7 +262,8 @@ describe('UserWebhookService', () => {
 				});
 				await service.enqueueUserWebhook(webhook.userId, 'note', { foo: 'bar' } as any);
 
-				expect(queueService.userWebhookDeliver).not.toHaveBeenCalled();
+				const jobs = await userWebhookDeliverQueue.getJobs();
+				expect(jobs.length).toBe(0);
 			});
 
 			test('未許可のイベント種別が渡された場合はWebhookはキューに追加されない', async () => {
@@ -287,7 +278,8 @@ describe('UserWebhookService', () => {
 				await service.enqueueUserWebhook(webhook1.userId, 'renote', { foo: 'bar' } as any);
 				await service.enqueueUserWebhook(webhook2.userId, 'renote', { foo: 'bar' } as any);
 
-				expect(queueService.userWebhookDeliver).not.toHaveBeenCalled();
+				const jobs = await userWebhookDeliverQueue.getJobs();
+				expect(jobs.length).toBe(0);
 			});
 
 			test('ユーザIDが異なるWebhookはキューに追加されない', async () => {
@@ -297,7 +289,8 @@ describe('UserWebhookService', () => {
 				});
 				await service.enqueueUserWebhook(idService.gen(), 'note', { foo: 'bar' } as any);
 
-				expect(queueService.userWebhookDeliver).not.toHaveBeenCalled();
+				const jobs = await userWebhookDeliverQueue.getJobs();
+				expect(jobs.length).toBe(0);
 			});
 
 			test('混在した時、有効かつ許可されたイベント種別のみ', async () => {
@@ -324,8 +317,9 @@ describe('UserWebhookService', () => {
 				});
 				await service.enqueueUserWebhook(userId, 'note', { foo: 'bar' } as any);
 
-				expect(queueService.userWebhookDeliver).toHaveBeenCalledTimes(1);
-				expect(queueService.userWebhookDeliver.mock.calls[0][0] as MiWebhook).toEqual(webhook1);
+				const jobs = await userWebhookDeliverQueue.getJobs();
+				expect(jobs.length).toBe(1);
+				expect(jobs[0].data.webhookId).toBe(webhook1.id);
 			});
 		});
 	});

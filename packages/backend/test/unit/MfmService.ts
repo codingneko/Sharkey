@@ -5,20 +5,29 @@
 
 import * as assert from 'assert';
 import * as mfm from 'mfm-js';
-import { Test } from '@nestjs/testing';
-
-import { CoreModule } from '@/core/CoreModule.js';
+import { MockEnvService } from '../misc/MockEnvService.js';
+import type { Config } from '@/config.js';
+import type { MiMeta } from '@/models/Meta.js';
 import { MfmService } from '@/core/MfmService.js';
-import { GlobalModule } from '@/GlobalModule.js';
+import { UtilityService } from '@/core/UtilityService.js';
 
 describe('MfmService', () => {
+	let config: Config;
+	let meta: MiMeta;
+	let envService: MockEnvService;
+	let utilityService: UtilityService;
 	let mfmService: MfmService;
 
-	beforeAll(async () => {
-		const app = await Test.createTestingModule({
-			imports: [GlobalModule, CoreModule],
-		}).compile();
-		mfmService = app.get<MfmService>(MfmService);
+	beforeEach(() => {
+		config = {
+			url: 'https://example.com',
+			host: 'example.com',
+			id: 'aidx',
+		} as unknown as Config;
+		meta = {} as unknown as MiMeta;
+		envService = new MockEnvService();
+		utilityService = new UtilityService(config, meta, envService);
+		mfmService = new MfmService(config, utilityService);
 	});
 
 	describe('toHtml', () => {
@@ -63,25 +72,31 @@ describe('MfmService', () => {
 			const output = '<p><ruby><span><i>some</i> text</span><rp>(</rp><rt>ignore me</rt><rp>)</rp></ruby></p>';
 			assert.equal(mfmService.toHtml(mfm.parse(input)), output);
 		});
+
+		test('inline', () => {
+			const input = 'https://example.com';
+			const output = '<a href="https://example.com">https://example.com</a>';
+			assert.equal(mfmService.toHtml(mfm.parse(input), [], [], true), output);
+		});
 	});
 
 	describe('toMastoApiHtml', () => {
-		test('br', async () => {
+		test('br', () => {
 			const input = 'foo\nbar\nbaz';
 			const output = '<p><span>foo<br>bar<br>baz</span></p>';
-			assert.equal(await mfmService.toMastoApiHtml(mfm.parse(input)), output);
+			assert.equal(mfmService.toMastoApiHtml(mfm.parse(input)), output);
 		});
 
-		test('br alt', async () => {
+		test('br alt', () => {
 			const input = 'foo\r\nbar\rbaz';
 			const output = '<p><span>foo<br>bar<br>baz</span></p>';
-			assert.equal(await mfmService.toMastoApiHtml(mfm.parse(input)), output);
+			assert.equal(mfmService.toMastoApiHtml(mfm.parse(input)), output);
 		});
 
-		test('escape', async () => {
+		test('escape', () => {
 			const input = '```\n<p>Hello, world!</p>\n```';
 			const output = '<p><pre><code>&lt;p&gt;Hello, world!&lt;/p&gt;</code></pre></p>';
-			assert.equal(await mfmService.toMastoApiHtml(mfm.parse(input)), output);
+			assert.equal(mfmService.toMastoApiHtml(mfm.parse(input)), output);
 		});
 
 		test('ruby', async () => {
@@ -162,7 +177,7 @@ describe('MfmService', () => {
 			assert.deepStrictEqual(mfmService.fromHtml('<p>a <ruby>Misskey<rp>(</rp><rt>ミス キー</rt><rp>)</rp> b</ruby> c</p>'), 'a $[ruby $[group Misskey] ミス キー] b c');
 			assert.deepStrictEqual(
 				mfmService.fromHtml('<p>a <ruby>Misskey<rp>(</rp><rt>ミスキー</rt><rp>)</rp>Misskey<rp>(</rp><rt>ミス キー</rt><rp>)</rp>Misskey<rp>(</rp><rt>ミスキー</rt><rp>)</rp></ruby> b</p>'),
-				'a $[ruby Misskey ミスキー]$[ruby $[group Misskey] ミス キー]$[ruby Misskey ミスキー] b'
+				'a $[ruby Misskey ミスキー]$[ruby $[group Misskey] ミス キー]$[ruby Misskey ミスキー] b',
 			);
 		});
 
@@ -181,8 +196,112 @@ describe('MfmService', () => {
 		test('ruby', () => {
 			assert.deepStrictEqual(
 				mfmService.fromHtml('<ruby> <i>some</i> text <rp>(</rp><rt>ignore me</rt><rp>)</rp> and <rt>more</rt></ruby>'),
-				'$[ruby $[group  <i>some</i> text ] ignore me]$[ruby $[group  and ] more]'
+				'$[ruby $[group  <i>some</i> text ] ignore me]$[ruby $[group  and ] more]',
 			);
+		});
+	});
+
+	describe('extractMentions', () => {
+		test('should extract local mentions', () => {
+			const ast = mfm.parse('@foo @bar @baz');
+			const mentions = mfmService.extractMentions(ast);
+			assert.deepStrictEqual(mentions, [{
+				username: 'foo',
+				acct: '@foo',
+				host: null,
+			}, {
+				username: 'bar',
+				acct: '@bar',
+				host: null,
+			}, {
+				username: 'baz',
+				acct: '@baz',
+				host: null,
+			}]);
+		});
+
+		test('should extract remote mentions', () => {
+			const ast = mfm.parse('@foo@1.example.com @bar@2.example.com @baz@3.example.com');
+			const mentions = mfmService.extractMentions(ast);
+			assert.deepStrictEqual(mentions, [{
+				username: 'foo',
+				acct: '@foo@1.example.com',
+				host: '1.example.com',
+			}, {
+				username: 'bar',
+				acct: '@bar@2.example.com',
+				host: '2.example.com',
+			}, {
+				username: 'baz',
+				acct: '@baz@3.example.com',
+				host: '3.example.com',
+			}]);
+		});
+
+		test('should extract mixed mentions', () => {
+			const ast = mfm.parse('@foo @bar@2.example.com @baz@3.example.com');
+			const mentions = mfmService.extractMentions(ast);
+			assert.deepStrictEqual(mentions, [{
+				username: 'foo',
+				acct: '@foo',
+				host: null,
+			}, {
+				username: 'bar',
+				acct: '@bar@2.example.com',
+				host: '2.example.com',
+			}, {
+				username: 'baz',
+				acct: '@baz@3.example.com',
+				host: '3.example.com',
+			}]);
+		});
+
+		test('should skip duplicate mentions', () => {
+			const ast = mfm.parse('@foo@1.example.com @FOO@1.example.com @foo@1.EXAMPLE.com');
+			const mentions = mfmService.extractMentions(ast);
+			assert.deepStrictEqual(mentions, [{
+				username: 'foo',
+				acct: '@foo@1.example.com',
+				host: '1.example.com',
+			}]);
+		});
+
+		test('should normalize to selfHost', () => {
+			const ast = mfm.parse('@foo');
+			const mentions = mfmService.extractMentions(ast, '1.example.com');
+			assert.deepStrictEqual(mentions, [{
+				username: 'foo',
+				acct: '@foo@1.example.com',
+				host: '1.example.com',
+			}]);
+		});
+
+		test('should normalize to local host', () => {
+			const ast = mfm.parse('@foo @foo@example.com');
+			const mentions = mfmService.extractMentions(ast, 'example.com');
+			assert.deepStrictEqual(mentions, [{
+				username: 'foo',
+				acct: '@foo',
+				host: null,
+			}]);
+		});
+
+		test('should extract nested mentions', () => {
+			const ast = mfm.parse('@foo **@bar** @baz');
+			const mentions = mfmService.extractMentions(ast);
+			assert.deepStrictEqual(mentions, [{
+				username: 'foo',
+				acct: '@foo',
+				host: null,
+			}, {
+				username: 'bar',
+				acct: '@bar',
+				host: null,
+			}, {
+				username: 'baz',
+				acct: '@baz',
+				host: null,
+			}]);
 		});
 	});
 });

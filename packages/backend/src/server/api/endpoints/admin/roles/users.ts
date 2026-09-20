@@ -11,6 +11,7 @@ import { QueryService } from '@/core/QueryService.js';
 import { DI } from '@/di-symbols.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import { IdService } from '@/core/IdService.js';
+import { TimeService } from '@/global/TimeService.js';
 import { ApiError } from '../../../error.js';
 
 export const meta = {
@@ -35,7 +36,7 @@ export const meta = {
 			properties: {
 				id: { type: 'string', format: 'misskey:id' },
 				createdAt: { type: 'string', format: 'date-time' },
-				user: { ref: 'UserDetailed' },
+				user: { ref: 'User' },
 				expiresAt: { type: 'string', format: 'date-time', nullable: true },
 			},
 			required: ['id', 'createdAt', 'user'],
@@ -50,6 +51,11 @@ export const paramDef = {
 		sinceId: { type: 'string', format: 'misskey:id' },
 		untilId: { type: 'string', format: 'misskey:id' },
 		limit: { type: 'integer', minimum: 1, maximum: 100, default: 10 },
+		detail: {
+			type: 'boolean',
+			nullable: false,
+			default: true,
+		},
 	},
 	required: ['roleId'],
 } as const;
@@ -66,6 +72,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private queryService: QueryService,
 		private userEntityService: UserEntityService,
 		private idService: IdService,
+		private readonly timeService: TimeService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			const role = await this.rolesRepository.findOneBy({
@@ -81,7 +88,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				.andWhere(new Brackets(qb => {
 					qb
 						.where('assign.expiresAt IS NULL')
-						.orWhere('assign.expiresAt > :now', { now: new Date() });
+						.orWhere('assign.expiresAt > :now', { now: this.timeService.date });
 				}))
 				.innerJoinAndSelect('assign.user', 'user');
 
@@ -90,12 +97,12 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				.getMany();
 
 			const _users = assigns.map(({ user, userId }) => user ?? userId);
-			const _userMap = await this.userEntityService.packMany(_users, me, { schema: 'UserDetailed' })
+			const _userMap = await this.userEntityService.packMany(_users, me, { schema: ps.detail ? 'UserDetailed' : 'UserLite' })
 				.then(users => new Map(users.map(u => [u.id, u])));
 			return await Promise.all(assigns.map(async assign => ({
 				id: assign.id,
 				createdAt: this.idService.parse(assign.id).date.toISOString(),
-				user: _userMap.get(assign.userId) ?? await this.userEntityService.pack(assign.user!, me, { schema: 'UserDetailed' }),
+				user: _userMap.get(assign.userId) ?? await this.userEntityService.pack(assign.user!, me, { schema: ps.detail ? 'UserDetailed' : 'UserLite' }),
 				expiresAt: assign.expiresAt?.toISOString() ?? null,
 			})));
 		});

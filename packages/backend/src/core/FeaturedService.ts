@@ -9,6 +9,7 @@ import type { MiGalleryPost, MiNote, MiUser } from '@/models/_.js';
 import { DI } from '@/di-symbols.js';
 import { bindThis } from '@/decorators.js';
 import { RoleService } from '@/core/RoleService.js';
+import { TimeService } from '@/global/TimeService.js';
 
 const GLOBAL_NOTES_RANKING_WINDOW = 1000 * 60 * 60 * 24 * 3; // 3日ごと
 export const GALLERY_POSTS_RANKING_WINDOW = 1000 * 60 * 60 * 24 * 3; // 3日ごと
@@ -24,12 +25,13 @@ export class FeaturedService {
 		private redisClient: Redis.Redis, // TODO: 専用のRedisサーバーを設定できるようにする
 
 		private readonly roleService: RoleService,
+		private readonly timeService: TimeService,
 	) {
 	}
 
 	@bindThis
 	private getCurrentWindow(windowRange: number): number {
-		const passed = new Date().getTime() - featuredEpoc;
+		const passed = this.timeService.now - featuredEpoc;
 		return Math.floor(passed / windowRange);
 	}
 
@@ -88,14 +90,12 @@ export class FeaturedService {
 	}
 
 	@bindThis
-	private async removeFromRanking(name: string, windowRange: number, element: string): Promise<void> {
+	private removeFromRanking(redisPipeline: Redis.ChainableCommander, name: string, windowRange: number, element: string): void {
 		const currentWindow = this.getCurrentWindow(windowRange);
 		const previousWindow = currentWindow - 1;
 
-		const redisPipeline = this.redisClient.pipeline();
 		redisPipeline.zrem(`${name}:${currentWindow}`, element);
 		redisPipeline.zrem(`${name}:${previousWindow}`, element);
-		await redisPipeline.exec();
 	}
 
 	@bindThis
@@ -149,7 +149,15 @@ export class FeaturedService {
 	}
 
 	@bindThis
-	public removeHashtagsFromRanking(hashtag: string): Promise<void> {
-		return this.removeFromRanking('featuredHashtagsRanking', HASHTAG_RANKING_WINDOW, hashtag);
+	public async removeHashtagsFromRanking(hashtags: string[]): Promise<void> {
+		if (hashtags.length < 1) {
+			return;
+		}
+
+		const redisPipeline = this.redisClient.pipeline();
+		for (const hashtag of hashtags) {
+			this.removeFromRanking(redisPipeline, 'featuredHashtagsRanking', HASHTAG_RANKING_WINDOW, hashtag);
+		}
+		await redisPipeline.exec();
 	}
 }

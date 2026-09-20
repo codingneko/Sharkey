@@ -3,9 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { Module } from '@nestjs/common';
+import { Module, type Import } from '@nestjs/common';
 import { CoreModule } from '@/core/CoreModule.js';
-import { GlobalModule } from '@/GlobalModule.js';
 import { CheckModeratorsActivityProcessorService } from '@/queue/processors/CheckModeratorsActivityProcessorService.js';
 import { QueueLoggerService } from './QueueLoggerService.js';
 import { QueueProcessorService } from './QueueProcessorService.js';
@@ -44,13 +43,19 @@ import { AggregateRetentionProcessorService } from './processors/AggregateRetent
 import { ExportFavoritesProcessorService } from './processors/ExportFavoritesProcessorService.js';
 import { RelationshipProcessorService } from './processors/RelationshipProcessorService.js';
 import { ScheduleNotePostProcessorService } from './processors/ScheduleNotePostProcessorService.js';
+import { CleanupApLogsProcessorService } from './processors/CleanupApLogsProcessorService.js';
+import { HibernateUsersProcessorService } from './processors/HibernateUsersProcessorService.js';
+import { BackgroundTaskProcessorService } from './processors/BackgroundTaskProcessorService.js';
+
+/** External module dependencies */
+const $Imports = [
+	CoreModule,
+] as const satisfies Import[];
 
 @Module({
-	imports: [
-		GlobalModule,
-		CoreModule,
-	],
+	imports: $Imports,
 	providers: [
+		// TODO move to CoreService
 		QueueLoggerService,
 		TickChartsProcessorService,
 		ResyncChartsProcessorService,
@@ -90,9 +95,12 @@ import { ScheduleNotePostProcessorService } from './processors/ScheduleNotePostP
 		CheckModeratorsActivityProcessorService,
 		QueueProcessorService,
 		ScheduleNotePostProcessorService,
+		CleanupApLogsProcessorService,
+		HibernateUsersProcessorService,
+		BackgroundTaskProcessorService,
 	],
 	exports: [
-		QueueProcessorService,
-	],
+		$Imports,
+	].flat(),
 })
 export class QueueProcessorModule {}

@@ -41,13 +41,14 @@ export class InviteCodeEntityService {
 			relations: ['createdBy', 'usedBy'],
 		});
 
+		// noinspection ES6MissingAwait
 		return await awaitAll({
 			id: target.id,
 			code: target.code,
 			expiresAt: target.expiresAt ? target.expiresAt.toISOString() : null,
 			createdAt: this.idService.parse(target.id).date.toISOString(),
-			createdBy: target.createdBy ? hints?.packedCreatedBy ?? await this.userEntityService.pack(target.createdBy, me) : null,
-			usedBy: target.usedBy ? hints?.packedUsedBy ?? await this.userEntityService.pack(target.usedBy, me) : null,
+			createdBy: target.createdBy ? hints?.packedCreatedBy ?? this.userEntityService.pack(target.createdBy, me) : null,
+			usedBy: target.usedBy ? hints?.packedUsedBy ?? this.userEntityService.pack(target.usedBy, me) : null,
 			usedAt: target.usedAt ? target.usedAt.toISOString() : null,
 			used: !!target.usedAt,
 		});
@@ -62,7 +63,7 @@ export class InviteCodeEntityService {
 		const _usedBys = tickets.map(({ usedBy, usedById }) => usedBy ?? usedById).filter(x => x != null);
 		const _userMap = await this.userEntityService.packMany([..._createdBys, ..._usedBys], me)
 			.then(users => new Map(users.map(u => [u.id, u])));
-		return Promise.all(
+		return await Promise.all(
 			tickets.map(ticket => {
 				const packedCreatedBy = ticket.createdById != null ? _userMap.get(ticket.createdById) : undefined;
 				const packedUsedBy = ticket.usedById != null ? _userMap.get(ticket.usedById) : undefined;

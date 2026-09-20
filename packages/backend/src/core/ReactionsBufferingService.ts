@@ -6,12 +6,13 @@
 import { Inject, Injectable } from '@nestjs/common';
 import * as Redis from 'ioredis';
 import { DI } from '@/di-symbols.js';
+import { TimeService } from '@/global/TimeService.js';
 import type { MiNote } from '@/models/Note.js';
 import { bindThis } from '@/decorators.js';
 import type { MiUser, NotesRepository } from '@/models/_.js';
 import type { Config } from '@/config.js';
 import { PER_NOTE_REACTION_USER_PAIR_CACHE_MAX } from '@/const.js';
-import type { GlobalEvents } from '@/core/GlobalEventService.js';
+import { InternalEventService, InternalEventTypes } from '@/global/InternalEventService.js';
 import type { OnApplicationShutdown } from '@nestjs/common';
 
 const REDIS_DELTA_PREFIX = 'reactionsBufferDeltas';
@@ -31,27 +32,18 @@ export class ReactionsBufferingService implements OnApplicationShutdown {
 
 		@Inject(DI.notesRepository)
 		private notesRepository: NotesRepository,
+
+		private readonly timeService: TimeService,
+		private readonly internalEventService: InternalEventService,
 	) {
-		this.redisForSub.on('message', this.onMessage);
+		this.internalEventService.on('metaUpdated', this.onMetaUpdated);
 	}
 
 	@bindThis
-	private async onMessage(_: string, data: string) {
-		const obj = JSON.parse(data);
-
-		if (obj.channel === 'internal') {
-			const { type, body } = obj.message as GlobalEvents['internal']['payload'];
-			switch (type) {
-				case 'metaUpdated': {
-					// リアクションバッファリングが有効→無効になったら即bake
-					if (body.before != null && body.before.enableReactionsBuffering && !body.after.enableReactionsBuffering) {
-						this.bake();
-					}
-					break;
-				}
-				default:
-					break;
-			}
+	private async onMetaUpdated(body: InternalEventTypes['metaUpdated']): Promise<void> {
+		// リアクションバッファリングが有効→無効になったら即bake
+		if (body.before.enableReactionsBuffering && !body.after.enableReactionsBuffering) {
+			await this.bake();
 		}
 	}
 
@@ -62,7 +54,7 @@ export class ReactionsBufferingService implements OnApplicationShutdown {
 		for (let i = 0; i < currentPairs.length; i++) {
 			pipeline.zadd(`${REDIS_PAIR_PREFIX}:${noteId}`, i, currentPairs[i]);
 		}
-		pipeline.zadd(`${REDIS_PAIR_PREFIX}:${noteId}`, Date.now(), `${userId}/${reaction}`);
+		pipeline.zadd(`${REDIS_PAIR_PREFIX}:${noteId}`, this.timeService.now, `${userId}/${reaction}`);
 		pipeline.zremrangebyrank(`${REDIS_PAIR_PREFIX}:${noteId}`, 0, -(PER_NOTE_REACTION_USER_PAIR_CACHE_MAX + 1));
 		await pipeline.exec();
 	}
@@ -144,7 +136,7 @@ export class ReactionsBufferingService implements OnApplicationShutdown {
 	// TODO: scanは重い可能性があるので、別途 bufferedNoteIds を直接Redis上に持っておいてもいいかもしれない
 	@bindThis
 	public async bake(): Promise<void> {
-		const bufferedNoteIds = [];
+		const bufferedNoteIds: string[] = [];
 		let cursor = '0';
 		do {
 			// https://github.com/redis/ioredis#transparent-key-prefixing
@@ -201,7 +193,7 @@ export class ReactionsBufferingService implements OnApplicationShutdown {
 
 	@bindThis
 	public dispose(): void {
-		this.redisForSub.off('message', this.onMessage);
+		this.internalEventService.off('metaUpdated', this.onMetaUpdated);
 	}
 
 	@bindThis

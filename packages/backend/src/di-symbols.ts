@@ -14,6 +14,14 @@ export const DI = {
 	redisForTimelines: Symbol('redisForTimelines'),
 	redisForReactions: Symbol('redisForReactions'),
 	redisForRateLimit: Symbol('redisForRateLimit'),
+	console: Symbol('console'),
+	globalLogger: Symbol('globalLogger'),
+
+	/**
+	 * Temporary, non-secure identifier that is unique to this DI container instance.
+	 * Implemented as a random 50-bit integer encoded in 10 characters, which provides a good balance of uniqueness vs memory space.
+	 */
+	nodeId: Symbol('nodeId'),
 
 	//#region Repositories
 	usersRepository: Symbol('usersRepository'),
@@ -92,7 +100,7 @@ export const DI = {
 	chatRoomsRepository: Symbol('chatRoomsRepository'),
 	chatRoomMembershipsRepository: Symbol('chatRoomMembershipsRepository'),
 	chatRoomInvitationsRepository: Symbol('chatRoomInvitationsRepository'),
-	noteEditRepository: Symbol('noteEditRepository'),
+	noteEditsRepository: Symbol('noteEditsRepository'),
 	bubbleGameRecordsRepository: Symbol('bubbleGameRecordsRepository'),
 	reversiGamesRepository: Symbol('reversiGamesRepository'),
 	noteScheduleRepository: Symbol('noteScheduleRepository'),

@@ -25,6 +25,7 @@ import { getAppearNote } from '@/utility/get-appear-note.js';
 import { genEmbedCode } from '@/utility/get-embed-code.js';
 import { prefer } from '@/preferences.js';
 import { getPluginHandlers } from '@/plugin.js';
+import { showNoteOnOriginalInstance } from '@/utility/show-note-on-original-instance.js';
 
 export async function getNoteClipMenu(props: {
 	note: Misskey.entities.Note;
@@ -151,6 +152,28 @@ export function getAbuseNoteMenu(note: Misskey.entities.Note, text: string): Men
 	};
 }
 
+export function getMandatoryCWMenu(note: Misskey.entities.Note): MenuItem {
+	return {
+		icon: 'ph-warning ph-bold ph-lg',
+		text: i18n.ts.mandatoryCWForNote,
+		action: async () => {
+			const result = await os.inputText({
+				type: 'text',
+				title: i18n.ts.mandatoryCWForNote,
+				text: i18n.ts.mandatoryCWForNoteDescription,
+				default: note.mandatoryCW ?? '',
+			});
+
+			if (result.canceled) return;
+
+			await os.apiWithDialog('admin/cw-note', {
+				noteId: note.id,
+				cw: result.result || null,
+			});
+		},
+	};
+}
+
 export function getCopyNoteLinkMenu(note: Misskey.entities.Note, text: string): MenuItem {
 	return {
 		icon: 'ti ti-link',
@@ -213,9 +236,9 @@ export function getNoteMenu(props: {
 				noteId: appearNote.id,
 			});
 
-			os.post({ initialNote: appearNote, renote: appearNote.renote, reply: appearNote.reply, channel: appearNote.channel });
+			os.post({ initialNote: appearNote, renote: appearNote.renote ?? undefined, reply: appearNote.reply ?? undefined, channel: appearNote.channel });
 
-			if (Date.now() - new Date(appearNote.createdAt).getTime() < 1000 * 60 && appearNote.userId === $i.id) {
+			if ($i && Date.now() - new Date(appearNote.createdAt).getTime() < 1000 * 60 && appearNote.userId === $i.id) {
 				claimAchievement('noteDeletedWithin1min');
 			}
 		});
@@ -224,8 +247,8 @@ export function getNoteMenu(props: {
 	function edit(): void {
 		os.post({
 			initialNote: appearNote,
-			renote: appearNote.renote,
-			reply: appearNote.reply,
+			renote: appearNote.renote ?? undefined,
+			reply: appearNote.reply ?? undefined,
 			channel: appearNote.channel,
 			editId: appearNote.id,
 			initialFiles: appearNote.files,
@@ -242,6 +265,14 @@ export function getNoteMenu(props: {
 	function toggleThreadMute(mute: boolean): void {
 		os.apiWithDialog(mute ? 'notes/thread-muting/create' : 'notes/thread-muting/delete', {
 			noteId: appearNote.id,
+			noteOnly: false,
+		});
+	}
+
+	function toggleNoteMute(mute: boolean): void {
+		os.apiWithDialog(mute ? 'notes/thread-muting/create' : 'notes/thread-muting/delete', {
+			noteId: appearNote.id,
+			noteOnly: true,
 		});
 	}
 
@@ -293,9 +324,11 @@ export function getNoteMenu(props: {
 	const menuItems: MenuItem[] = [];
 
 	if ($i) {
+		/*
 		const statePromise = misskeyApi('notes/state', {
 			noteId: appearNote.id,
 		});
+		*/
 
 		if (props.currentClip?.userId === $i.id) {
 			menuItems.push({
@@ -327,7 +360,7 @@ export function getNoteMenu(props: {
 				icon: 'ti ti-external-link',
 				text: i18n.ts.showOnRemote,
 				action: () => {
-					window.open(appearNote.url ?? appearNote.uri, '_blank', 'noopener');
+					showNoteOnOriginalInstance(appearNote);
 				},
 			});
 		} else {
@@ -352,15 +385,19 @@ export function getNoteMenu(props: {
 
 		menuItems.push({ type: 'divider' });
 
-		menuItems.push(statePromise.then(state => state.isFavorited ? {
-			icon: 'ti ti-star-off',
-			text: i18n.ts.unfavorite,
-			action: () => toggleFavorite(false),
-		} : {
-			icon: 'ti ti-star',
-			text: i18n.ts.favorite,
-			action: () => toggleFavorite(true),
-		}));
+		if (appearNote.isFavorited) {
+			menuItems.push({
+				icon: 'ti ti-star-off',
+				text: i18n.ts.unfavorite,
+				action: () => toggleFavorite(false),
+			});
+		} else {
+			menuItems.push({
+				icon: 'ti ti-star',
+				text: i18n.ts.favorite,
+				action: () => toggleFavorite(true),
+			});
+		}
 
 		menuItems.push({
 			type: 'parent',
@@ -369,15 +406,33 @@ export function getNoteMenu(props: {
 			children: () => getNoteClipMenu(props),
 		});
 
-		menuItems.push(statePromise.then(state => state.isMutedThread ? {
-			icon: 'ti ti-message-off',
-			text: i18n.ts.unmuteThread,
-			action: () => toggleThreadMute(false),
-		} : {
-			icon: 'ti ti-message-off',
-			text: i18n.ts.muteThread,
-			action: () => toggleThreadMute(true),
-		}));
+		if (appearNote.isMutingThread) {
+			menuItems.push({
+				icon: 'ti ti-message-off',
+				text: i18n.ts.unmuteThread,
+				action: () => toggleThreadMute(false),
+			});
+		} else {
+			menuItems.push({
+				icon: 'ti ti-message-off',
+				text: i18n.ts.muteThread,
+				action: () => toggleThreadMute(true),
+			});
+		}
+
+		if (appearNote.isMutingNote) {
+			menuItems.push({
+				icon: 'ti ti-message-off',
+				text: i18n.ts.unmuteNote,
+				action: () => toggleNoteMute(false),
+			});
+		} else {
+			menuItems.push({
+				icon: 'ti ti-message-off',
+				text: i18n.ts.muteNote,
+				action: () => toggleNoteMute(true),
+			});
+		}
 
 		if (appearNote.userId === $i.id) {
 			if (($i.pinnedNoteIds ?? []).includes(appearNote.id)) {
@@ -449,6 +504,9 @@ export function getNoteMenu(props: {
 
 		if (appearNote.userId === $i.id || $i.isModerator || $i.isAdmin) {
 			menuItems.push({ type: 'divider' });
+			if ($i.isModerator || $i.isAdmin) {
+				menuItems.push(getMandatoryCWMenu(appearNote));
+			}
 			if (appearNote.userId === $i.id) {
 				menuItems.push({
 					icon: 'ph-pencil-simple ph-bold ph-lg',
@@ -491,7 +549,7 @@ export function getNoteMenu(props: {
 				icon: 'ti ti-external-link',
 				text: i18n.ts.showOnRemote,
 				action: () => {
-					window.open(appearNote.url ?? appearNote.uri, '_blank', 'noopener');
+					showNoteOnOriginalInstance(appearNote);
 				},
 			});
 		} else {

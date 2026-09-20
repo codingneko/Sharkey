@@ -7,13 +7,14 @@ SPDX-License-Identifier: AGPL-3.0-only
 <div class="_spacer" :style="{ '--MI_SPACER-w': narrow ? '800px' : '1100px', ...background }">
 	<div ref="rootEl" class="ftskorzw" :class="{ wide: !narrow }" style="container-type: inline-size;">
 		<div class="main _gaps">
+			<MkInfo v-if="user.isDeleted" :warn="true">{{ i18n.ts.userDeleted }}</MkInfo>
 			<MkInfo v-if="user.isSuspended" :warn="true">{{ i18n.ts.userSuspended }}</MkInfo>
 			<MkInfo v-if="user.isSilenced" :warn="true">{{ i18n.ts.userSilenced }}</MkInfo>
 
 			<div class="profile _gaps">
-				<MkAccountMoved v-if="user.movedTo" :movedTo="user.movedTo"/>
+				<MkAccountMoved v-if="user.movedToUri" :movedTo="user.movedTo" :movedToUri="user.movedToUri"/>
 				<MkRemoteCaution v-if="user.host != null" :href="user.url ?? user.uri!"/>
-				<MkInfo v-if="user.host == null && user.username.includes('.')">{{ i18n.ts.isSystemAccount }}</MkInfo>
+				<MkInfo v-if="user.isSystem">{{ i18n.ts.isSystemAccount }}</MkInfo>
 
 				<div :key="user.id" class="main _panel">
 					<div class="banner-container" :class="{ [$style.bannerContainerTall]: useTallBanner }">
@@ -31,15 +32,22 @@ SPDX-License-Identifier: AGPL-3.0-only
 								</button>
 							</div>
 						</div>
-						<ul v-if="$i && $i.id != user.id" :class="$style.infoBadges">
-							<li v-if="user.isFollowed && user.isFollowing">{{ i18n.ts.mutuals }}</li>
-							<li v-else-if="user.isFollowing">{{ i18n.ts.following }}</li>
-							<li v-else-if="user.isFollowed">{{ i18n.ts.followsYou }}</li>
-							<li v-if="user.isMuted">{{ i18n.ts.muted }}</li>
-							<li v-if="user.isRenoteMuted">{{ i18n.ts.renoteMuted }}</li>
-							<li v-if="user.isBlocking">{{ i18n.ts.blocked }}</li>
-							<li v-if="user.isBlocked && $i.isModerator">{{ i18n.ts.blockingYou }}</li>
-						</ul>
+						<div :class="$style.infoDiv">
+							<ul v-if="$i && $i.id !== user.id" :class="$style.infoBadges">
+								<li v-if="user.isFollowed && user.isFollowing">{{ i18n.ts.mutuals }}</li>
+								<li v-else-if="user.isFollowing">{{ i18n.ts.following }}</li>
+								<li v-else-if="user.isFollowed">{{ i18n.ts.followsYou }}</li>
+								<li v-if="user.isMuted">{{ i18n.ts.muted }}</li>
+								<li v-if="user.isRenoteMuted">{{ i18n.ts.renoteMuted }}</li>
+								<li v-if="user.isBlocking">{{ i18n.ts.blocked }}</li>
+								<li v-if="user.isBlocked && $i.isModerator">{{ i18n.ts.blockingYou }}</li>
+							</ul>
+							<ul v-if="user.listenbrainz" :class="$style.infoBadges">
+								<li :class="$style.listenbrainz">
+									<XListenBrainz :key="user.id" :userId="user.id"/>
+								</li>
+							</ul>
+						</div>
 						<div :class="$style.actions" class="actions">
 							<button :class="$style.actionsMenu" class="menu _button" @click="menu"><i class="ti ti-dots"></i></button>
 							<MkFollowButton v-if="$i?.id != user.id" v-model:user="user" :class="$style.actionsFollow" :disabled="disableFollowControls" :inline="true" :transparent="false" :full="true" class="koudoku" @update:wait="onFollowButtonDisabledChanged"/>
@@ -149,9 +157,6 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<MkLazy>
 						<XActivity :key="user.id" :user="user" :collapsed="true"/>
 					</MkLazy>
-					<MkLazy v-if="user.listenbrainz && listenbrainzdata">
-						<XListenBrainz :key="user.id" :user="user" :collapsed="true"/>
-					</MkLazy>
 				</template>
 				<!-- <div v-if="!disableNotes">
 					<MkLazy>
@@ -173,14 +178,13 @@ SPDX-License-Identifier: AGPL-3.0-only
 					<MkLazy>
 						<div v-if="noteview === 'pinned'" class="_gaps">
 							<div v-if="user.pinnedNotes.length < 1" class="_fullinfo">
-								<img :src="infoImageUrl" draggable="false" aria-hidden="true" :alt="i18n.ts.noNotes"/>
-								<div>{{ i18n.ts.noNotes }}</div>
+								<MkResult type="empty" :text="i18n.ts.noNotes"/>
 							</div>
 							<div v-else class="_panel">
-								<DynamicNote v-for="note of user.pinnedNotes" :key="note.id" class="note" :class="$style.pinnedNote" :note="note" :pinned="true"/>
+								<DynamicNote v-for="note of user.pinnedNotes" :key="note.id" class="note" :class="$style.pinnedNote" :note="note" :pinned="true" @expandMute="n => onExpandMute(n)"/>
 							</div>
 						</div>
-						<MkNotes v-else :class="$style.tl" :noGap="true" :pagination="AllPagination"/>
+						<MkNotes v-else :class="$style.tl" :noGap="true" :pagination="AllPagination" @expandMute="n => onExpandMute(n)"/>
 					</MkLazy>
 				</MkStickyContainer>
 			</div>
@@ -188,7 +192,6 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<div v-if="!narrow" class="sub _gaps" style="container-type: inline-size;">
 			<XFiles :key="user.id" :user="user" @unfold="emit('unfoldFiles')"/>
 			<XActivity :key="user.id" :user="user"/>
-			<XListenBrainz v-if="user.listenbrainz && listenbrainzdata" :key="user.id" :user="user"/>
 		</div>
 	</div>
 	<div class="background"></div>
@@ -199,6 +202,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 import { defineAsyncComponent, computed, onMounted, onUnmounted, nextTick, watch, ref } from 'vue';
 import * as Misskey from 'misskey-js';
 import { getScrollPosition } from '@@/js/scroll.js';
+import { useMuteOverrides } from '@/utility/check-word-mute.js';
 import MkTab from '@/components/MkTab.vue';
 import MkNotes from '@/components/MkNotes.vue';
 import MkFollowButton from '@/components/MkFollowButton.vue';
@@ -220,10 +224,11 @@ import { misskeyApi } from '@/utility/misskey-api.js';
 import { isFollowingVisibleForMe, isFollowersVisibleForMe } from '@/utility/isFfVisibleForMe.js';
 import { useRouter } from '@/router.js';
 import { getStaticImageUrl } from '@/utility/media-proxy.js';
-import { infoImageUrl } from '@/instance.js';
 import MkSparkle from '@/components/MkSparkle.vue';
 import { prefer } from '@/preferences.js';
 import DynamicNote from '@/components/DynamicNote.vue';
+import MkOmit from '@/components/MkOmit.vue';
+import { deepAssign } from '@/utility/merge';
 
 function calcAge(birthdate: string): number {
 	const date = new Date(birthdate);
@@ -242,7 +247,7 @@ function calcAge(birthdate: string): number {
 
 const XFiles = defineAsyncComponent(() => import('./index.files.vue'));
 const XActivity = defineAsyncComponent(() => import('./index.activity.vue'));
-const XListenBrainz = defineAsyncComponent(() => import('./index.listenbrainz.vue'));
+const XListenBrainz = defineAsyncComponent(() => import('@/components/SkListenBrainz.vue'));
 
 const props = withDefaults(defineProps<{
 	user: Misskey.entities.UserDetailed;
@@ -255,6 +260,28 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
 	(ev: 'unfoldFiles'): void;
 }>();
+
+const muteOverrides = useMuteOverrides();
+
+function onExpandMute(note: Misskey.entities.Note) {
+	if (note.user.id === props.user.id) {
+		// This kills the mandatoryCW for this user below this point
+		deepAssign(muteOverrides, {
+			user: {
+				[props.user.id]: {
+					userMandatoryCW: null,
+					userSilenced: false,
+				},
+				instance: {
+					[props.user.host ?? '']: {
+						instanceMandatoryCW: null,
+						instanceSilenced: false,
+					},
+				},
+			},
+		});
+	}
+}
 
 const router = useRouter();
 
@@ -269,26 +296,6 @@ const isEditingMemo = ref(false);
 const moderationNote = ref(props.user.moderationNote);
 const editModerationNote = ref(false);
 const noteview = ref<string | null>(props.user.pinnedNotes.length ? 'pinned' : null);
-
-const listenbrainzdata = ref(false);
-if (props.user.listenbrainz) {
-	(async function() {
-		try {
-			const response = await window.fetch(`https://api.listenbrainz.org/1/user/${props.user.listenbrainz}/playing-now`, {
-				method: 'GET',
-				headers: {
-					'Content-Type': 'application/json',
-				},
-			});
-			const data = await response.json();
-			if (data.payload.listens && data.payload.listens.length !== 0) {
-				listenbrainzdata.value = true;
-			}
-		} catch (err) {
-			listenbrainzdata.value = false;
-		}
-	})();
-}
 
 const background = computed(() => {
 	if (props.user.backgroundUrl == null) return {};
@@ -874,19 +881,26 @@ onUnmounted(() => {
 	margin-left: 4px;
 	color: var(--MI_THEME-success);
 }
-
-.infoBadges {
+.infoDiv {
 	position: absolute;
-	top: 12px;
-	left: 12px;
-
+	max-width: calc(100% - 6rem);
+	top: .75rem;
+	left: .75rem;
+	
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+}
+.infoBadges {
 	display: flex;
 	flex-direction: row;
+	gap: 0.25rem;
 
 	padding: 0;
 	margin: 0;
 
 	> * {
+		box-sizing: border-box;
 		padding: 4px 8px;
 		color: #fff;
 		background: rgba(0, 0, 0, 0.7);
@@ -895,10 +909,10 @@ onUnmounted(() => {
 		list-style-type: none;
 		margin-left: 0;
 	}
+}
 
-	> :not(:first-child) {
-		margin-left: 8px;
-	}
+.listenbrainz:empty {
+	display: none;
 }
 
 .actions {

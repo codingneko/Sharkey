@@ -11,22 +11,20 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</div>
 		<div
 			v-else-if="!input && !select"
-			:class="[$style.icon, {
-				[$style.type_success]: type === 'success',
-				[$style.type_error]: type === 'error',
-				[$style.type_warning]: type === 'warning',
-				[$style.type_info]: type === 'info',
-			}]"
+			:class="[$style.icon]"
 		>
-			<i v-if="type === 'success'" :class="$style.iconInner" class="ti ti-check"></i>
-			<i v-else-if="type === 'error'" :class="$style.iconInner" class="ti ti-circle-x"></i>
-			<i v-else-if="type === 'warning'" :class="$style.iconInner" class="ti ti-alert-triangle"></i>
-			<i v-else-if="type === 'info'" :class="$style.iconInner" class="ti ti-info-circle"></i>
-			<i v-else-if="type === 'question'" :class="$style.iconInner" class="ti ti-help-circle"></i>
+			<MkSystemIcon v-if="type === 'success'" :class="$style.iconInner" style="width: 45px;" type="success"/>
+			<MkSystemIcon v-else-if="type === 'error'" :class="$style.iconInner" style="width: 45px;" type="error"/>
+			<MkSystemIcon v-else-if="type === 'warning'" :class="$style.iconInner" style="width: 45px;" type="warn"/>
+			<MkSystemIcon v-else-if="type === 'info'" :class="$style.iconInner" style="width: 45px;" type="info"/>
+			<MkSystemIcon v-else-if="type === 'question'" :class="$style.iconInner" style="width: 45px;" type="question"/>
 			<MkLoading v-else-if="type === 'waiting'" :class="$style.iconInner" :em="true"/>
 		</div>
 		<header v-if="title" :class="$style.title" class="_selectable"><Mfm :text="title"/></header>
-		<div v-if="text" :class="$style.text" class="_selectable"><Mfm :text="text" :isBlock="true" :plain="plain"/></div>
+		<div v-if="text" :class="[$style.text, textCopyable && $style.textCopyable]" class="_selectable">
+			<Mfm :text="text" :isBlock="true" :plain="plain"/>
+			<button v-if="textCopyable" :class="$style.copyButton" @click.stop="copyToClipboard(text)"><i class="ti ti-copy"></i></button>
+		</div>
 		<MkInput v-if="input" v-model="inputValue" autofocus :type="input.type || 'text'" :placeholder="input.placeholder || undefined" :autocomplete="input.autocomplete" @keydown="onInputKeydown">
 			<template v-if="input.type === 'password'" #prefix><i class="ti ti-lock"></i></template>
 			<template #caption>
@@ -62,6 +60,7 @@ import MkButton from '@/components/MkButton.vue';
 import MkInput from '@/components/MkInput.vue';
 import MkSelect from '@/components/MkSelect.vue';
 import { i18n } from '@/i18n.js';
+import { copyToClipboard } from '@/utility/copy-to-clipboard.js';
 
 type Input = {
 	type?: 'text' | 'number' | 'password' | 'email' | 'url' | 'date' | 'time' | 'search' | 'datetime-local';
@@ -106,6 +105,7 @@ const props = withDefaults(defineProps<{
 	okText?: string;
 	cancelText?: string;
 	plain?: boolean;
+	textCopyable?: boolean;
 }>(), {
 	type: 'info',
 	showOkButton: true,
@@ -203,22 +203,6 @@ function onInputKeydown(evt: KeyboardEvent) {
 	margin: 0 auto;
 }
 
-.type_info {
-	color: #55c4dd;
-}
-
-.type_success {
-	color: var(--MI_THEME-success);
-}
-
-.type_error {
-	color: var(--MI_THEME-error);
-}
-
-.type_warning {
-	color: var(--MI_THEME-warn);
-}
-
 .title {
 	margin: 0 0 8px 0;
 	font-weight: bold;
@@ -231,6 +215,35 @@ function onInputKeydown(evt: KeyboardEvent) {
 
 .text {
 	margin: 16px 0 0 0;
+}
+
+.textCopyable {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+}
+
+.copyButton {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	border: none;
+	border-radius: var(--MI-radius-sm);
+	background: var(--MI_THEME-buttonBg);
+	color: var(--MI_THEME-fg);
+	cursor: pointer;
+	flex-shrink: 0;
+
+	&:hover {
+		background: var(--MI_THEME-buttonHoverBg);
+	}
+
+	&:active {
+		background: var(--MI_THEME-buttonActiveBg);
+	}
 }
 
 .buttons {

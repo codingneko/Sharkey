@@ -1,6 +1,11 @@
 <!--
 SPDX-FileCopyrightText: hazelnoot and other Sharkey contributors
 SPDX-License-Identifier: AGPL-3.0-only
+
+Displays a group of URL previews.
+
+If the URL to be previewed links to a note, it will be displayed as a quote.
+Attempts to avoid displaying the same preview twice, even if multiple URLs point to the same resource.
 -->
 
 <template>
@@ -20,6 +25,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 		:showAsQuote="showAsQuote"
 		:showActions="showActions"
 		:skipNoteIds="skipNoteIds"
+		@expandMute="n => onExpandNote(n)"
 	></MkUrlPreview>
 </template>
 </template>
@@ -37,6 +43,8 @@ import { $i } from '@/i';
 import { misskeyApi } from '@/utility/misskey-api';
 import MkUrlPreview from '@/components/MkUrlPreview.vue';
 import { getNoteUrls } from '@/utility/getNoteUrls';
+import { deepAssign } from '@/utility/merge';
+import { useMuteOverrides } from '@/utility/check-word-mute';
 
 type Summary = SummalyResult & {
 	note?: Misskey.entities.Note | null;
@@ -69,6 +77,32 @@ const props = withDefaults(defineProps<{
 	skipNoteIds: () => [],
 });
 
+const emit = defineEmits<{
+	(ev: 'expandMute', note: Misskey.entities.Note): void;
+}>();
+
+const muteOverrides = useMuteOverrides();
+
+function onExpandNote(note: Misskey.entities.Note) {
+	// Expand related mutes within this preview group
+	deepAssign(muteOverrides, {
+		user: {
+			[note.user.id]: {
+				userMandatoryCW: null,
+				userSilenced: false,
+			},
+		},
+		instance: {
+			[note.user.host ?? '']: {
+				instanceMandatoryCW: null,
+				instanceSilenced: false,
+			},
+		},
+	});
+
+	emit('expandMute', note);
+}
+
 const urlPreviews = ref<Summary[]>([]);
 
 const urls = computed<string[]>(() => {
@@ -93,10 +127,9 @@ const urls = computed<string[]>(() => {
 	return [];
 });
 
-// todo un-ref these
 const isRefreshing = ref<Promise<void> | false>(false);
-const cachedNotes = ref(new Map<string, Misskey.entities.Note | null>());
-const cachedPreviews = ref(new Map<string, Summary | null>());
+const cachedNotes = new Map<string, Misskey.entities.Note | null>();
+const cachedPreviews = new Map<string, Summary | null>();
 const cachedUsers = new Map<string, Misskey.entities.User | null>();
 
 /**
@@ -151,7 +184,7 @@ async function fetchPreviews(): Promise<Summary[]> {
 }
 
 async function fetchPreview(url: string): Promise<Summary | null> {
-	const cached = cachedPreviews.value.get(url);
+	const cached = cachedPreviews.get(url);
 	if (cached) {
 		return cached;
 	}
@@ -163,15 +196,15 @@ async function fetchPreview(url: string): Promise<Summary | null> {
 	if (res?.ok) {
 		// Success - got the summary
 		const summary: Summary = await res.json();
-		cachedPreviews.value.set(url, summary);
+		cachedPreviews.set(url, summary);
 		if (summary.url !== url) {
-			cachedPreviews.value.set(summary.url, summary);
+			cachedPreviews.set(summary.url, summary);
 		}
 		return summary;
 	}
 
 	// Failed, blocked, or not found
-	cachedPreviews.value.set(url, null);
+	cachedPreviews.set(url, null);
 	return null;
 }
 
@@ -187,7 +220,7 @@ async function attachNote(summary: Summary, noteLimiter: Limiter<Misskey.entitie
 }
 
 async function fetchNote(noteUri: string): Promise<Misskey.entities.Note | null> {
-	const cached = cachedNotes.value.get(noteUri);
+	const cached = cachedNotes.get(noteUri);
 	if (cached) {
 		return cached;
 	}
@@ -197,15 +230,15 @@ async function fetchNote(noteUri: string): Promise<Misskey.entities.Note | null>
 		const note = response['object'];
 
 		// Success - got the note
-		cachedNotes.value.set(noteUri, note);
+		cachedNotes.set(noteUri, note);
 		if (note.uri && note.uri !== noteUri) {
-			cachedNotes.value.set(note.uri, note);
+			cachedNotes.set(note.uri, note);
 		}
 		return note;
 	}
 
 	// Failed, blocked, or not found
-	cachedNotes.value.set(noteUri, null);
+	cachedNotes.set(noteUri, null);
 	return null;
 }
 

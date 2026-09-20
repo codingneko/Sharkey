@@ -3,11 +3,16 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { Endpoint } from '@/server/api/endpoint-base.js';
-import { GlobalEventService } from '@/core/GlobalEventService.js';
 import { MetaService } from '@/core/MetaService.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
+import { InternalEventService } from '@/global/InternalEventService.js';
+import { RoleService } from '@/core/RoleService.js';
+import { IdentifiableError } from '@/misc/identifiable-error.js';
+import type { MiMeta } from '@/models/Meta.js';
+import { DI } from '@/di-symbols.js';
+import { ApiError } from '../../../error.js';
 
 export const meta = {
 	tags: ['admin', 'role'],
@@ -15,6 +20,14 @@ export const meta = {
 	requireCredential: true,
 	requireAdmin: true,
 	kind: 'write:admin:roles',
+
+	errors: {
+		badValues: {
+			message: 'Invalid policy values',
+			code: 'BAD_POLICY_VALUES',
+			id: '39d78ad7-0f00-4bff-b2e2-2e7db889e05d',
+		},
+	},
 } as const;
 
 export const paramDef = {
@@ -32,20 +45,35 @@ export const paramDef = {
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
+		@Inject(DI.meta)
+		private serverSettings: MiMeta,
+
 		private metaService: MetaService,
-		private globalEventService: GlobalEventService,
 		private moderationLogService: ModerationLogService,
+		private roleService: RoleService,
+		private readonly internalEventService: InternalEventService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
-			const before = await this.metaService.fetch(true);
+			try {
+				this.roleService.assertValidDefaultPolicies(ps.policies);
+			} catch (e) {
+				if (e instanceof IdentifiableError) {
+					if (e.id === '39d78ad7-0f00-4bff-b2e2-2e7db889e05d') {
+						throw new ApiError(
+							meta.errors.badValues,
+							e.cause,
+						);
+					}
+				}
+				throw e;
+			}
 
-			await this.metaService.update({
+			const before = Object.assign({}, this.serverSettings);
+			const after = await this.metaService.update({
 				policies: ps.policies,
 			});
 
-			const after = await this.metaService.fetch(true);
-
-			this.globalEventService.publishInternalEvent('policiesUpdated', after.policies);
+			await this.internalEventService.emit('policiesUpdated', after.policies);
 			this.moderationLogService.log(me, 'updateServerSettings', {
 				before: before.policies,
 				after: after.policies,

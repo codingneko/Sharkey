@@ -5,6 +5,7 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 import { DI } from '@/di-symbols.js';
+import type { MiMeta } from '@/models/Meta.js';
 import type { Config } from '@/config.js';
 import { MetaService } from '@/core/MetaService.js';
 import { MemorySingleCache } from '@/misc/cache.js';
@@ -13,6 +14,7 @@ import NotesChart from '@/core/chart/charts/notes.js';
 import UsersChart from '@/core/chart/charts/users.js';
 import { DEFAULT_POLICIES } from '@/core/RoleService.js';
 import { SystemAccountService } from '@/core/SystemAccountService.js';
+import { InstanceStatsService } from '@/core/InstanceStatsService.js';
 import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
 
 const nodeinfo2_1path = '/nodeinfo/2.1';
@@ -25,10 +27,14 @@ export class NodeinfoServerService {
 		@Inject(DI.config)
 		private config: Config,
 
+		@Inject(DI.meta)
+		private readonly meta: MiMeta,
+
 		private systemAccountService: SystemAccountService,
 		private metaService: MetaService,
 		private notesChart: NotesChart,
 		private usersChart: UsersChart,
+		private readonly instanceStatsService: InstanceStatsService,
 	) {
 		//this.createServer = this.createServer.bind(this);
 	}
@@ -46,41 +52,28 @@ export class NodeinfoServerService {
 
 	@bindThis
 	public createServer(fastify: FastifyInstance, options: FastifyPluginOptions, done: (err?: Error) => void) {
-		const nodeinfo2 = async (version: number) => {
-			const now = Date.now();
-
-			const notesChart = await this.notesChart.getChart('hour', 1, null);
-			const localPosts = notesChart.local.total[0];
-
-			const usersChart = await this.usersChart.getChart('hour', 1, null);
-			const total = usersChart.local.total[0];
-
-			const [
-				meta,
-				//activeHalfyear,
-				//activeMonth,
-			] = await Promise.all([
-				this.metaService.fetch(true),
-				// 重い
-				//this.usersRepository.count({ where: { host: IsNull(), lastActiveDate: MoreThan(new Date(now - 15552000000)) } }),
-				//this.usersRepository.count({ where: { host: IsNull(), lastActiveDate: MoreThan(new Date(now - 2592000000)) } }),
-			]);
-
-			const activeHalfyear = null;
-			const activeMonth = null;
-
+		const nodeinfo2 = async (version: '2.0' | '2.1') => {
+			const meta = this.meta;
+			const stats = await this.instanceStatsService.fetch();
 			const proxyAccount = await this.systemAccountService.fetch('proxy');
 
 			const basePolicies = { ...DEFAULT_POLICIES, ...meta.policies };
 
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			const document: any = {
-				software: {
-					name: 'sharkey',
-					version: this.config.version,
-					homepage: nodeinfo_homepage,
+			const software = {
+				name: 'sharkey',
+				version: this.config.version,
+			};
+
+			if (version !== '2.0') {
+				Object.assign(software, {
+					homepage: meta.repositoryUrl ?? nodeinfo_homepage,
 					repository: meta.repositoryUrl,
-				},
+				});
+			}
+
+			return {
+				version,
+				software,
 				protocols: ['activitypub'],
 				services: {
 					inbound: [] as string[],
@@ -88,8 +81,12 @@ export class NodeinfoServerService {
 				},
 				openRegistrations: !meta.disableRegistration,
 				usage: {
-					users: { total, activeHalfyear, activeMonth },
-					localPosts,
+					users: {
+						total: stats.localUsers,
+						activeHalfyear: stats.localUsersSixMonths,
+						activeMonth: stats.localUsersThisMonth,
+					},
+					localPosts: stats.localNotes,
 					localComments: 0,
 				},
 				metadata: {
@@ -128,24 +125,17 @@ export class NodeinfoServerService {
 					maxRemoteCwLength: this.config.maxRemoteCwLength,
 					maxAltTextLength: this.config.maxAltTextLength,
 					maxRemoteAltTextLength: this.config.maxRemoteAltTextLength,
+					maxBioLength: this.config.maxBioLength,
+					maxRemoteBioLength: this.config.maxRemoteBioLength,
 					enableEmail: meta.enableEmail,
 					enableServiceWorker: meta.enableServiceWorker,
 					proxyAccountName: proxyAccount.username,
 					themeColor: meta.themeColor ?? '#86b300',
 				},
 			};
-			if (version >= 21) {
-				document.software.repository = meta.repositoryUrl;
-				document.software.homepage = meta.repositoryUrl;
-			}
-			return document;
 		};
 
-		const cache = new MemorySingleCache<Awaited<ReturnType<typeof nodeinfo2>>>(1000 * 60 * 10); // 10m
-
 		fastify.get(nodeinfo2_1path, async (request, reply) => {
-			const base = await cache.fetch(() => nodeinfo2(21));
-
 			reply
 				.type(
 					'application/json; profile="http://nodeinfo.diaspora.software/ns/schema/2.1#"',
@@ -155,14 +145,10 @@ export class NodeinfoServerService {
 				.header('Access-Control-Allow-Methods', 'GET, OPTIONS')
 				.header('Access-Control-Allow-Origin', '*')
 				.header('Access-Control-Expose-Headers', 'Vary');
-			return { version: '2.1', ...base };
+			return await nodeinfo2('2.1');
 		});
 
 		fastify.get(nodeinfo2_0path, async (request, reply) => {
-			const base = await cache.fetch(() => nodeinfo2(20));
-
-			delete (base as any).software.repository;
-
 			reply
 				.type(
 					'application/json; profile="http://nodeinfo.diaspora.software/ns/schema/2.0#"',
@@ -172,7 +158,7 @@ export class NodeinfoServerService {
 				.header('Access-Control-Allow-Methods', 'GET, OPTIONS')
 				.header('Access-Control-Allow-Origin', '*')
 				.header('Access-Control-Expose-Headers', 'Vary');
-			return { version: '2.0', ...base };
+			return await nodeinfo2('2.0');
 		});
 
 		done();

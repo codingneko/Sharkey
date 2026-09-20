@@ -7,11 +7,12 @@ import { Inject, Injectable } from '@nestjs/common';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import { ModuleRef } from '@nestjs/core';
-import { AuthenticationResponseJSON } from '@simplewebauthn/types';
+import { AuthenticationResponseJSON } from '@simplewebauthn/server';
 import type { Config } from '@/config.js';
-import type { InstancesRepository, AccessTokensRepository } from '@/models/_.js';
+import type { InstancesRepository, AccessTokensRepository, UserProfilesRepository } from '@/models/_.js';
 import { DI } from '@/di-symbols.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
+import { InternalEventService } from '@/global/InternalEventService.js';
 import { bindThis } from '@/decorators.js';
 import endpoints from './endpoints.js';
 import { ApiCallService } from './ApiCallService.js';
@@ -34,11 +35,15 @@ export class ApiServerService {
 		@Inject(DI.accessTokensRepository)
 		private accessTokensRepository: AccessTokensRepository,
 
+		@Inject(DI.userProfilesRepository)
+		private userProfilesRepository: UserProfilesRepository,
+
 		private userEntityService: UserEntityService,
 		private apiCallService: ApiCallService,
 		private signupApiService: SignupApiService,
 		private signinApiService: SigninApiService,
 		private signinWithPasskeyApiService: SigninWithPasskeyApiService,
+		private readonly internalEventService: InternalEventService,
 	) {
 		//this.createServer = this.createServer.bind(this);
 	}
@@ -47,6 +52,7 @@ export class ApiServerService {
 	public createServer(fastify: FastifyInstance, options: FastifyPluginOptions, done: (err?: Error) => void) {
 		fastify.register(cors, {
 			origin: '*',
+			methods: '*',
 		});
 
 		fastify.register(multipart, {
@@ -145,6 +151,33 @@ export class ApiServerService {
 
 		fastify.post<{ Body: { code: string; } }>('/signup-pending', (request, reply) => this.signupApiService.signupPending(request, reply));
 
+		// POST unsubscribes (and is sent by compatible MUAs), GET redirects to the interactive user-facing non-API page
+		fastify.get<{ Params: { user: string, token: string; } }>('/unsubscribe/:user/:token', (request, reply) => {
+			return reply.redirect(`${this.config.url}/unsubscribe/${request.params.user}/${request.params.token}`, 302);
+		});
+
+		fastify.post<{ Params: { user: string, token: string; } }>('/unsubscribe/:user/:token', async (request, reply) => {
+			const { affected } = await this.userProfilesRepository.update({
+				userId: request.params.user,
+				oneClickUnsubscribeToken: request.params.token,
+			}, {
+				receiveAnnouncementEmail: false,
+			});
+			if (affected) {
+				await this.internalEventService.emit('updateUserProfile', { userId: request.params.user, keys: ['receiveAnnouncementEmail'] });
+				return ['Unsubscribed.'];
+			} else {
+				reply.code(401);
+				return {
+					error: {
+						message: 'Invalid parameters.',
+						code: 'INVALID_PARAMETERS',
+						id: '26654194-410e-44e2-b42e-460ff6f92476',
+					},
+				};
+			}
+		});
+
 		fastify.get('/v1/instance/peers', async (request, reply) => {
 			const instances = await this.instancesRepository.find({
 				select: ['host'],
@@ -162,7 +195,7 @@ export class ApiServerService {
 			});
 
 			if (token && token.session != null && !token.fetched) {
-				this.accessTokensRepository.update(token.id, {
+				await this.accessTokensRepository.update(token.id, {
 					fetched: true,
 				});
 

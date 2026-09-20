@@ -1,18 +1,22 @@
 <!--
 SPDX-FileCopyrightText: syuilo and misskey-project
 SPDX-License-Identifier: AGPL-3.0-only
+
+Displays a note in the Sharkey style. Used to show the "main" note in a given context.
 -->
 
 <template>
-<div
-	v-if="!hardMuted && muted === false"
+<SkMutedNote
 	v-show="!isDeleted"
-	ref="rootEl"
+	ref="rootComp"
 	v-hotkey="keymap"
+	:note="appearNote"
+	:withHardMute="withHardMute"
 	:class="[$style.root, { [$style.showActionsOnlyHover]: prefer.s.showNoteActionsOnlyHover, [$style.skipRender]: prefer.s.skipNoteRender }]"
 	:tabindex="isDeleted ? '-1' : '0'"
+	@expandMute="n => emit('expandMute', n)"
 >
-	<SkNoteSub v-if="appearNote.reply" v-show="!renoteCollapsed && !inReplyToCollapsed" :note="appearNote.reply" :class="$style.replyTo"/>
+	<SkNoteSub v-if="appearNote.reply" v-show="!renoteCollapsed && !inReplyToCollapsed" :note="appearNote.reply" :class="$style.replyTo" @expandMute="n => emit('expandMute', n)"/>
 	<div v-if="appearNote.reply && inReplyToCollapsed && !renoteCollapsed" :class="$style.collapsedInReplyTo">
 		<div :class="$style.collapsedInReplyToLine"></div>
 		<MkAvatar :class="$style.collapsedInReplyToAvatar" :user="appearNote.reply.user" link preview/>
@@ -60,10 +64,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 		</div>
 		<div :class="[{ [$style.clickToOpen]: prefer.s.clickToOpen }]" @click.stop="prefer.s.clickToOpen ? noteclick(appearNote.id) : undefined">
 			<div style="container-type: inline-size;">
-				<p v-if="mergedCW != null" :class="$style.cw">
+				<p v-if="appearNote.cw != null" :class="$style.cw">
 					<Mfm
-						v-if="mergedCW != ''"
-						:text="mergedCW"
+						v-if="appearNote.cw != ''"
+						:text="appearNote.cw"
 						:author="appearNote.user"
 						:nyaize="'respect'"
 						:enableEmojiMenu="true"
@@ -73,7 +77,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 					/>
 					<MkCwButton v-model="showContent" :text="appearNote.text" :renote="appearNote.renote" :files="appearNote.files" :poll="appearNote.poll" style="margin: 4px 0;" @click.stop/>
 				</p>
-				<div v-show="mergedCW == null || showContent" :class="[{ [$style.contentCollapsed]: collapsed }]">
+				<div v-show="appearNote.cw == null || showContent" :class="[{ [$style.contentCollapsed]: collapsed }]">
 					<div :class="$style.text">
 						<span v-if="appearNote.isHidden" style="opacity: 0.5">({{ i18n.ts.private }})</span>
 						<Mfm
@@ -96,8 +100,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 						<MkMediaList ref="galleryEl" :mediaList="appearNote.files" @click.stop/>
 					</div>
 					<MkPoll v-if="appearNote.poll" :noteId="appearNote.id" :poll="appearNote.poll" :local="!appearNote.user.host" :author="appearNote.user" :emojiUrls="appearNote.emojis" :class="$style.poll" @click.stop/>
-					<div v-if="isEnabledUrlPreview">
-						<SkUrlPreviewGroup :sourceUrls="urls" :sourceNote="appearNote" :compact="true" :detail="false" :showAsQuote="!appearNote.user.rejectQuotes" :skipNoteIds="selfNoteIds" :class="$style.urlPreview" @click.stop/>
+					<div v-if="instance.enableUrlPreview" :class="[$style.urlPreview, '_gaps_s']" @click.stop>
+						<SkUrlPreviewGroup :sourceUrls="urls" :sourceNote="appearNote" :compact="true" :detail="false" :showAsQuote="!appearNote.user.rejectQuotes" :skipNoteIds="selfNoteIds" @expandMute="n => emit('expandMute', n)"/>
 					</div>
 					<div v-if="appearNote.renote" :class="$style.quote"><SkNoteSimple :note="appearNote.renote" :class="$style.quoteNote"/></div>
 					<button v-if="isLong && collapsed" :class="$style.collapsed" class="_button" @click.stop @click="collapsed = false">
@@ -125,9 +129,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 					v-tooltip="renoteTooltip"
 					:class="$style.footerButton"
 					class="_button"
-					:style="renoted ? 'color: var(--MI_THEME-accent) !important;' : ''"
+					:style="appearNote.isRenoted ? 'color: var(--MI_THEME-accent) !important;' : ''"
 					@click.stop
-					@mousedown.prevent="renoted ? undoRenote(appearNote) : boostVisibility($event.shiftKey)"
+					@mousedown.prevent="appearNote.isRenoted ? undoRenote(appearNote) : boostVisibility($event.shiftKey)"
 				>
 					<i class="ti ti-repeat"></i>
 					<p v-if="appearNote.renoteCount > 0" :class="$style.footerButtonCount">{{ number(appearNote.renoteCount) }}</p>
@@ -167,26 +171,16 @@ SPDX-License-Identifier: AGPL-3.0-only
 			</footer>
 		</div>
 	</article>
-</div>
-<div v-else-if="!hardMuted" :class="$style.muted" @click="muted = false">
-	<SkMutedNote :muted="muted" :note="appearNote"></SkMutedNote>
-</div>
-<div v-else>
-	<!--
-		MkDateSeparatedList uses TransitionGroup which requires single element in the child elements
-		so MkNote create empty div instead of no elements
-	-->
-</div>
+</SkMutedNote>
 </template>
 
 <script lang="ts" setup>
-import { computed, inject, onMounted, ref, useTemplateRef, watch, provide } from 'vue';
+import { computed, inject, ref, useTemplateRef, watch, provide } from 'vue';
 import * as mfm from 'mfm-js';
 import * as Misskey from 'misskey-js';
 import { isLink } from '@@/js/is-link.js';
 import { shouldCollapsed } from '@@/js/collapsed.js';
 import * as config from '@@/js/config.js';
-import { computeMergedCw } from '@@/js/compute-merged-cw.js';
 import type { Ref } from 'vue';
 import type { MenuItem } from '@/types/menu.js';
 import type { OpenOnRemoteOptions } from '@/utility/please-login.js';
@@ -204,7 +198,6 @@ import MkUsersTooltip from '@/components/MkUsersTooltip.vue';
 import MkUrlPreview from '@/components/MkUrlPreview.vue';
 import MkButton from '@/components/MkButton.vue';
 import { pleaseLogin } from '@/utility/please-login.js';
-import { checkMutes } from '@/utility/check-word-mute.js';
 import { notePage } from '@/filters/note.js';
 import { userPage } from '@/filters/user.js';
 import number from '@/filters/number.js';
@@ -226,11 +219,11 @@ import { getNoteSummary } from '@/utility/get-note-summary.js';
 import MkRippleEffect from '@/components/MkRippleEffect.vue';
 import { showMovedDialog } from '@/utility/show-moved-dialog.js';
 import { boostMenuItems, computeRenoteTooltip } from '@/utility/boost-quote.js';
-import { instance, isEnabledUrlPreview, policies } from '@/instance.js';
+import { instance, policies } from '@/instance.js';
 import { focusPrev, focusNext } from '@/utility/focus.js';
 import { getAppearNote } from '@/utility/get-appear-note.js';
 import { prefer } from '@/preferences.js';
-import { getPluginHandlers } from '@/plugin.js';
+import { setupNoteViewInterruptors } from '@/plugin.js';
 import { DI } from '@/di.js';
 import { useRouter } from '@/router.js';
 import SkMutedNote from '@/components/SkMutedNote.vue';
@@ -238,6 +231,7 @@ import SkNoteTranslation from '@/components/SkNoteTranslation.vue';
 import { getSelfNoteIds } from '@/utility/get-self-note-ids.js';
 import { extractPreviewUrls } from '@/utility/extract-preview-urls.js';
 import SkUrlPreviewGroup from '@/components/SkUrlPreviewGroup.vue';
+import MkNoteSub from '@/components/MkNoteSub.vue';
 
 const props = withDefaults(defineProps<{
 	note: Misskey.entities.Note;
@@ -253,6 +247,7 @@ provide(DI.mock, props.mock);
 const emit = defineEmits<{
 	(ev: 'reaction', emoji: string): void;
 	(ev: 'removeReaction', emoji: string): void;
+	(ev: 'expandMute', note: Misskey.entities.Note): void;
 }>();
 
 const router = useRouter();
@@ -269,29 +264,10 @@ function noteclick(id: string) {
 	}
 }
 
-// plugin
-const noteViewInterruptors = getPluginHandlers('note_view_interruptor');
-if (noteViewInterruptors.length > 0) {
-	onMounted(async () => {
-		let result: Misskey.entities.Note | null = deepClone(note.value);
-		for (const interruptor of noteViewInterruptors) {
-			try {
-				result = await interruptor.handler(result!) as Misskey.entities.Note | null;
-				if (result === null) {
-					isDeleted.value = true;
-					return;
-				}
-			} catch (err) {
-				console.error(err);
-			}
-		}
-		note.value = result as Misskey.entities.Note;
-	});
-}
-
 const isRenote = Misskey.note.isPureRenote(note.value);
 
-const rootEl = useTemplateRef('rootEl');
+const rootComp = useTemplateRef('rootComp');
+const rootEl = computed(() => rootComp.value?.rootEl ?? null);
 const menuButton = useTemplateRef('menuButton');
 const renoteButton = useTemplateRef('renoteButton');
 const renoteTime = useTemplateRef('renoteTime');
@@ -310,8 +286,6 @@ const selfNoteIds = computed(() => getSelfNoteIds(props.note));
 const isLong = shouldCollapsed(appearNote.value, urls.value);
 const collapsed = ref(prefer.s.expandLongNote && appearNote.value.cw == null && isLong ? false : appearNote.value.cw == null && isLong);
 const isDeleted = ref(false);
-const renoted = ref(false);
-const { muted, hardMuted } = checkMutes(appearNote.value, props.withHardMute);
 const translation = ref<Misskey.entities.NotesTranslateResponse | false | null>(null);
 const translating = ref(false);
 const showTicker = (prefer.s.instanceTicker === 'always') || (prefer.s.instanceTicker === 'remote' && appearNote.value.user.instance);
@@ -319,7 +293,9 @@ const canRenote = computed(() => ['public', 'home'].includes(appearNote.value.vi
 const renoteCollapsed = ref(
 	prefer.s.collapseRenotes && isRenote && (
 		($i && ($i.id === note.value.userId || $i.id === appearNote.value.userId)) || // `||` must be `||`! See https://github.com/misskey-dev/misskey/issues/13131
-		(appearNote.value.myReaction != null)
+		(appearNote.value.myReaction != null) ||
+		(appearNote.value.isFavorited) ||
+		(appearNote.value.isRenoted)
 	),
 );
 const inReplyToCollapsed = ref(prefer.s.collapseNotesRepliedTo);
@@ -332,9 +308,7 @@ const pleaseLoginContext = computed<OpenOnRemoteOptions>(() => ({
 	url: appearNote.value.url ?? appearNote.value.uri ?? `${config.url}/notes/${appearNote.value.id}`,
 }));
 
-const mergedCW = computed(() => computeMergedCw(appearNote.value));
-
-const renoteTooltip = computeRenoteTooltip(renoted);
+const renoteTooltip = computeRenoteTooltip(appearNote);
 
 let renoting = false;
 
@@ -349,7 +323,7 @@ const keymap = {
 	},
 	'q': () => {
 		if (renoteCollapsed.value) return;
-		if (canRenote.value && !renoted.value && !renoting) renote(prefer.s.visibilityOnBoost);
+		if (canRenote.value && !appearNote.value.isRenoted && !renoting) renote(prefer.s.visibilityOnBoost);
 	},
 	'm': () => {
 		if (renoteCollapsed.value) return;
@@ -391,6 +365,8 @@ const keymap = {
 		callback: () => focusAfter(),
 	},
 } as const satisfies Keymap;
+
+setupNoteViewInterruptors(note, isDeleted);
 
 provide(DI.mfmEmojiReactCallback, (reaction) => {
 	sound.playMisskeySfx('reaction');
@@ -459,16 +435,6 @@ if (!props.mock) {
 		});
 	});
 
-	if ($i) {
-		misskeyApi('notes/renotes', {
-			noteId: appearNote.value.id,
-			userId: $i.id,
-			limit: 1,
-		}).then((res) => {
-			renoted.value = res.length > 0;
-		});
-	}
-
 	if (appearNote.value.reactionAcceptance === 'likeOnly') {
 		useTooltip(reactButton, async (showing) => {
 			const reactions = await misskeyApiGet('notes/reactions', {
@@ -527,7 +493,7 @@ function renote(visibility: Visibility, localOnly: boolean = false) {
 				channelId: appearNote.value.channelId,
 			}).then(() => {
 				os.toast(i18n.ts.renoted);
-				renoted.value = true;
+				appearNote.value.isRenoted = true;
 			}).finally(() => { renoting = false; });
 		}
 	} else if (!appearNote.value.channel || appearNote.value.channel.allowRenoteToExternal) {
@@ -548,7 +514,7 @@ function renote(visibility: Visibility, localOnly: boolean = false) {
 				renoteId: appearNote.value.id,
 			}).then(() => {
 				os.toast(i18n.ts.renoted);
-				renoted.value = true;
+				appearNote.value.isRenoted = true;
 			}).finally(() => { renoting = false; });
 		}
 	}
@@ -727,7 +693,7 @@ function undoRenote(note) : void {
 		noteId: note.id,
 	});
 	os.toast(i18n.ts.rmboost);
-	renoted.value = false;
+	appearNote.value.isRenoted = false;
 
 	const el = renoteButton.value as HTMLElement | null | undefined;
 	if (el) {
@@ -1366,16 +1332,7 @@ function emitUpdReaction(emoji: string, delta: number) {
 	}
 }
 
-.muted {
-	padding: 8px;
-	text-align: center;
-	opacity: 0.7;
-	cursor: pointer;
-}
-
-.muted:hover {
-	background: var(--MI_THEME-buttonBg);
-}
+// Mute CSS moved to SkMutedNote.vue
 
 .reactionOmitted {
 	display: inline-block;

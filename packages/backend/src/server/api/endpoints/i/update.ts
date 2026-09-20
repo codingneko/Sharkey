@@ -32,9 +32,12 @@ import type { Config } from '@/config.js';
 import { safeForSql } from '@/misc/safe-for-sql.js';
 import { verifyFieldLinks } from '@/misc/verify-field-link.js';
 import { AvatarDecorationService } from '@/core/AvatarDecorationService.js';
+import { InternalEventService } from '@/global/InternalEventService.js';
 import { notificationRecieveConfig } from '@/models/json-schema/user.js';
 import { userUnsignedFetchOptions } from '@/const.js';
 import { renderInlineError } from '@/misc/render-inline-error.js';
+import { trackPromise } from '@/misc/promise-tracker.js';
+import { QueueService } from '@/core/QueueService.js';
 import { ApiLoggerService } from '../../ApiLoggerService.js';
 import { ApiError } from '../../error.js';
 
@@ -140,6 +143,13 @@ export const meta = {
 			message: 'You tried setting a default content warning which is too long.',
 			code: 'MAX_CW_LENGTH',
 			id: '7004c478-bda3-4b4f-acb2-4316398c9d52',
+		},
+
+		maxBioLength: {
+			message: 'You tried setting a bio which is too long.',
+			code: 'MAX_BIO_LENGTH',
+			id: 'f3bb3543-8bd1-4e6d-9375-55efaf2b4102',
+			httpStatusCode: 422,
 		},
 	},
 
@@ -310,15 +320,16 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private httpRequestService: HttpRequestService,
 		private avatarDecorationService: AvatarDecorationService,
 		private utilityService: UtilityService,
+		private readonly queueService: QueueService,
+		private readonly internalEventService: InternalEventService,
 	) {
-		super(meta, paramDef, async (ps, _user, token) => {
-			const user = await this.usersRepository.findOneByOrFail({ id: _user.id }) as MiLocalUser;
+		super(meta, paramDef, async (ps, user, token) => {
 			const isSecure = token == null;
 
 			const updates = {} as Partial<MiUser>;
 			const profileUpdates = {} as Partial<MiUserProfile>;
 
-			const profile = await this.userProfilesRepository.findOneByOrFail({ userId: user.id });
+			const profile = await this.cacheService.userProfileCache.fetch(user.id);
 			let policies: RolePolicies | null = null;
 
 			if (ps.name !== undefined) {
@@ -329,7 +340,12 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 					updates.name = trimmedName === '' ? null : trimmedName;
 				}
 			}
-			if (ps.description !== undefined) profileUpdates.description = ps.description;
+			if (ps.description !== undefined) {
+				if (ps.description && ps.description.length > this.config.maxBioLength) {
+					throw new ApiError(meta.errors.maxBioLength);
+				}
+				profileUpdates.description = ps.description;
+			};
 			if (ps.followedMessage !== undefined) profileUpdates.followedMessage = ps.followedMessage;
 			if (ps.lang !== undefined) profileUpdates.lang = ps.lang;
 			if (ps.location !== undefined) profileUpdates.location = ps.location;
@@ -394,6 +410,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			if (typeof ps.carefulBot === 'boolean') profileUpdates.carefulBot = ps.carefulBot;
 			if (typeof ps.autoAcceptFollowed === 'boolean') profileUpdates.autoAcceptFollowed = ps.autoAcceptFollowed;
 			if (typeof ps.noCrawle === 'boolean') profileUpdates.noCrawle = ps.noCrawle;
+			if (typeof ps.preventAiLearning === 'boolean') profileUpdates.preventAiLearning = ps.preventAiLearning;
 			if (typeof ps.requireSigninToViewContents === 'boolean') updates.requireSigninToViewContents = ps.requireSigninToViewContents;
 			if ((typeof ps.makeNotesFollowersOnlyBefore === 'number') || (ps.makeNotesFollowersOnlyBefore === null)) updates.makeNotesFollowersOnlyBefore = ps.makeNotesFollowersOnlyBefore;
 			if ((typeof ps.makeNotesHiddenBefore === 'number') || (ps.makeNotesHiddenBefore === null)) updates.makeNotesHiddenBefore = ps.makeNotesHiddenBefore;
@@ -500,7 +517,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			}
 
 			if (ps.alsoKnownAs) {
-				if (_user.movedToUri) {
+				if (user.movedToUri) {
 					throw new ApiError({
 						message: 'You have moved your account.',
 						code: 'YOUR_ACCOUNT_MOVED',
@@ -520,7 +537,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 						this.apiLoggerService.logger.warn(`failed to resolve destination user: ${renderInlineError(e)}`);
 						throw new ApiError(meta.errors.noSuchUser);
 					});
-					if (knownAs.id === _user.id) throw new ApiError(meta.errors.forbiddenToSetYourself);
+					if (knownAs.id === user.id) throw new ApiError(meta.errors.forbiddenToSetYourself);
 
 					const toUrl = this.userEntityService.getUserUri(knownAs);
 					if (!toUrl) throw new ApiError(meta.errors.uriNull);
@@ -593,47 +610,44 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 			updates.emojis = emojis;
 			updates.tags = tags;
-
-			// ハッシュタグ更新
-			this.hashtagService.updateUsertags(user, tags);
 			//#endregion
 
 			if (Object.keys(updates).length > 0) {
 				await this.usersRepository.update(user.id, updates);
-				this.globalEventService.publishInternalEvent('localUserUpdated', { id: user.id });
 			}
 
 			const profileUrls = [
 				this.userEntityService.genLocalUserUri(user.id),
 				`${this.config.url}/@${user.username}`,
 			];
-			const verifiedLinks = await verifyFieldLinks(newFields, profileUrls, this.httpRequestService);
+			profileUpdates.verifiedLinks = await verifyFieldLinks(newFields, profileUrls, this.httpRequestService);
+			await this.userProfilesRepository.update(user.id, profileUpdates);
+			await this.internalEventService.emit('updateUserProfile', { userId: user.id, keys: Object.keys(profileUpdates) as (keyof MiUserProfile)[] });
 
-			await this.userProfilesRepository.update(user.id, {
-				...profileUpdates,
-				verifiedLinks,
-			});
+			// Internal event purges the cache, which we immediately refill
+			await this.internalEventService.emit('userUpdated', { id: user.id });
+			const updatedUser = await this.cacheService.findLocalUserById(user.id);
+			const updatedProfile = await this.cacheService.userProfileCache.fetch(user.id);
 
-			const iObj = await this.userEntityService.pack(user.id, user, {
+			const iObj = await this.userEntityService.pack(updatedUser, updatedUser, {
 				schema: 'MeDetailed',
 				includeSecrets: isSecure,
 			});
 
-			const updatedProfile = await this.userProfilesRepository.findOneByOrFail({ userId: user.id });
-
-			await this.cacheService.userProfileCache.set(user.id, updatedProfile);
-
 			// Publish meUpdated event
-			this.globalEventService.publishMainStream(user.id, 'meUpdated', iObj);
+			await this.globalEventService.publishMainStream(user.id, 'meUpdated', iObj);
+
+			// ハッシュタグ更新
+			await this.queueService.createUpdateUserTagsJob(user.id);
 
 			// 鍵垢を解除したとき、溜まっていたフォローリクエストがあるならすべて承認
-			if (user.isLocked && ps.isLocked === false) {
-				this.userFollowingService.acceptAllFollowRequests(user);
+			if (user.isLocked && !updatedUser.isLocked) {
+				trackPromise(this.userFollowingService.acceptAllFollowRequests(updatedUser));
 			}
 
 			// フォロワーにUpdateを配信
 			if (this.userNeedsPublishing(user, updates) || this.profileNeedsPublishing(profile, updatedProfile)) {
-				this.accountUpdateService.publishToFollowers(user);
+				trackPromise(this.accountUpdateService.publishToFollowers(updatedUser));
 			}
 
 			return iObj;

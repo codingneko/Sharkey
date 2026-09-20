@@ -5,6 +5,9 @@
 
 import { execa } from 'execa';
 import { writeFileSync, existsSync } from "node:fs";
+import { LoggerService } from '../built/core/LoggerService.js';
+import { NativeTimeService } from '../built/global/TimeService.js';
+import { EnvService } from '../built/global/EnvService.js';
 
 async function main() {
 	if (!process.argv.includes('--no-build')) {

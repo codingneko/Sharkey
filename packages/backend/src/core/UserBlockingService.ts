@@ -7,7 +7,7 @@ import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { IdService } from '@/core/IdService.js';
 import type { MiUser } from '@/models/User.js';
-import type { MiBlocking } from '@/models/Blocking.js';
+import { MiBlocking } from '@/models/Blocking.js';
 import { QueueService } from '@/core/QueueService.js';
 import { GlobalEventService } from '@/core/GlobalEventService.js';
 import { DI } from '@/di-symbols.js';
@@ -19,7 +19,10 @@ import { LoggerService } from '@/core/LoggerService.js';
 import { UserWebhookService } from '@/core/UserWebhookService.js';
 import { bindThis } from '@/decorators.js';
 import { CacheService } from '@/core/CacheService.js';
-import { UserFollowingService } from '@/core/UserFollowingService.js';
+import type { UserFollowingService } from '@/core/UserFollowingService.js';
+import { UserListService } from '@/core/UserListService.js';
+import { InternalEventService } from '@/global/InternalEventService.js';
+import { trackPromise } from '@/misc/promise-tracker.js';
 
 @Injectable()
 export class UserBlockingService implements OnModuleInit {
@@ -49,11 +52,14 @@ export class UserBlockingService implements OnModuleInit {
 		private webhookService: UserWebhookService,
 		private apRendererService: ApRendererService,
 		private loggerService: LoggerService,
+		private readonly userListService: UserListService,
+		private readonly internalEventService: InternalEventService,
 	) {
 		this.logger = this.loggerService.getLogger('user-block');
 	}
 
-	onModuleInit() {
+	@bindThis
+	public onModuleInit() {
 		this.userFollowingService = this.moduleRef.get('UserFollowingService');
 	}
 
@@ -67,29 +73,23 @@ export class UserBlockingService implements OnModuleInit {
 			this.removeFromList(blockee, blocker),
 		]);
 
-		const blocking = {
+		const blocking = new MiBlocking({
 			id: this.idService.gen(),
 			blocker,
 			blockerId: blocker.id,
 			blockee,
 			blockeeId: blockee.id,
-		} as MiBlocking;
+		});
 
 		await this.blockingsRepository.insert(blocking);
-
-		await Promise.all([
-			this.cacheService.userBlockingCache.delete(blocker.id),
-			this.cacheService.userBlockedCache.delete(blockee.id),
-		]);
-
-		this.globalEventService.publishInternalEvent('blockingCreated', {
+		await this.internalEventService.emit('blockingCreated', {
 			blockerId: blocker.id,
 			blockeeId: blockee.id,
 		});
 
 		if (this.userEntityService.isLocalUser(blocker) && this.userEntityService.isRemoteUser(blockee)) {
 			const content = this.apRendererService.addContext(this.apRendererService.renderBlock(blocking));
-			this.queueService.deliver(blocker, content, blockee.inbox, false);
+			trackPromise(this.queueService.deliver(blocker, content, blockee.inbox, false));
 		}
 	}
 
@@ -119,36 +119,32 @@ export class UserBlockingService implements OnModuleInit {
 			this.userEntityService.pack(followee, follower, {
 				schema: 'UserDetailedNotMe',
 			}).then(async packed => {
-				this.globalEventService.publishMainStream(follower.id, 'unfollow', packed);
-				this.webhookService.enqueueUserWebhook(follower.id, 'unfollow', { user: packed });
+				await this.globalEventService.publishMainStream(follower.id, 'unfollow', packed);
+				await this.webhookService.enqueueUserWebhook(follower.id, 'unfollow', { user: packed });
 			});
 		}
 
 		// リモートにフォローリクエストをしていたらUndoFollow送信
 		if (this.userEntityService.isLocalUser(follower) && this.userEntityService.isRemoteUser(followee)) {
 			const content = this.apRendererService.addContext(this.apRendererService.renderUndo(this.apRendererService.renderFollow(follower, followee), follower));
-			this.queueService.deliver(follower, content, followee.inbox, false);
+			await this.queueService.deliver(follower, content, followee.inbox, false);
 		}
 
 		// リモートからフォローリクエストを受けていたらReject送信
 		if (this.userEntityService.isRemoteUser(follower) && this.userEntityService.isLocalUser(followee)) {
 			const content = this.apRendererService.addContext(this.apRendererService.renderReject(this.apRendererService.renderFollow(follower, followee, request.requestId!), followee));
-			this.queueService.deliver(followee, content, follower.inbox, false);
+			await this.queueService.deliver(followee, content, follower.inbox, false);
 		}
 	}
 
 	@bindThis
 	private async removeFromList(listOwner: MiUser, user: MiUser) {
-		const userLists = await this.userListsRepository.findBy({
-			userId: listOwner.id,
+		const userLists = await this.userListsRepository.find({
+			where: { userId: listOwner.id },
+			select: { id: true },
 		});
 
-		for (const userList of userLists) {
-			await this.userListMembershipsRepository.delete({
-				userListId: userList.id,
-				userId: user.id,
-			});
-		}
+		await this.userListService.bulkRemoveMember(user, userLists.map(l => l.id));
 	}
 
 	@bindThis
@@ -169,13 +165,7 @@ export class UserBlockingService implements OnModuleInit {
 		blocking.blockee = blockee;
 
 		await this.blockingsRepository.delete(blocking.id);
-
-		await Promise.all([
-			this.cacheService.userBlockingCache.delete(blocker.id),
-			this.cacheService.userBlockedCache.delete(blockee.id),
-		]);
-
-		this.globalEventService.publishInternalEvent('blockingDeleted', {
+		await this.internalEventService.emit('blockingDeleted', {
 			blockerId: blocker.id,
 			blockeeId: blockee.id,
 		});
@@ -183,12 +173,13 @@ export class UserBlockingService implements OnModuleInit {
 		// deliver if remote bloking
 		if (this.userEntityService.isLocalUser(blocker) && this.userEntityService.isRemoteUser(blockee)) {
 			const content = this.apRendererService.addContext(this.apRendererService.renderUndo(this.apRendererService.renderBlock(blocking), blocker));
-			this.queueService.deliver(blocker, content, blockee.inbox, false);
+			await this.queueService.deliver(blocker, content, blockee.inbox, false);
 		}
 	}
 
 	@bindThis
 	public async checkBlocked(blockerId: MiUser['id'], blockeeId: MiUser['id']): Promise<boolean> {
-		return (await this.cacheService.userBlockingCache.fetch(blockerId)).has(blockeeId);
+		const relations = await this.cacheService.getUserRelation(blockerId, blockeeId);
+		return relations.isBlocking;
 	}
 }

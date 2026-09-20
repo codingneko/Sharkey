@@ -6,7 +6,7 @@
 import cluster from 'node:cluster';
 import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
+import { Inject, Injectable, type BeforeApplicationShutdown } from '@nestjs/common';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import fastifyRawBody from 'fastify-raw-body';
@@ -19,7 +19,11 @@ import type Logger from '@/logger.js';
 import * as Acct from '@/misc/acct.js';
 import { genIdenticon } from '@/misc/gen-identicon.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
+import { CustomEmojiService, encodeEmojiKey } from '@/core/CustomEmojiService.js';
+import { UtilityService } from '@/core/UtilityService.js';
 import { LoggerService } from '@/core/LoggerService.js';
+import { EnvService } from '@/global/EnvService.js';
+import { CacheService } from '@/core/CacheService.js';
 import { bindThis } from '@/decorators.js';
 import { renderInlineError } from '@/misc/render-inline-error.js';
 import { ActivityPubServerService } from './ActivityPubServerService.js';
@@ -33,13 +37,14 @@ import { ClientServerService } from './web/ClientServerService.js';
 import { OpenApiServerService } from './api/openapi/OpenApiServerService.js';
 import { MastodonApiServerService } from './api/mastodon/MastodonApiServerService.js';
 import { OAuth2ProviderService } from './oauth/OAuth2ProviderService.js';
+import { InternalEventService } from '@/global/InternalEventService.js';
 
 const _dirname = fileURLToPath(new URL('.', import.meta.url));
 
 @Injectable()
-export class ServerService implements OnApplicationShutdown {
+export class ServerService implements BeforeApplicationShutdown {
 	private logger: Logger;
-	#fastify: FastifyInstance;
+	#fastify?: FastifyInstance;
 
 	constructor(
 		@Inject(DI.config)
@@ -71,6 +76,11 @@ export class ServerService implements OnApplicationShutdown {
 		private globalEventService: GlobalEventService,
 		private loggerService: LoggerService,
 		private oauth2ProviderService: OAuth2ProviderService,
+		private readonly customEmojiService: CustomEmojiService,
+		private readonly envService: EnvService,
+		private readonly internalEventService: InternalEventService,
+		private readonly cacheService: CacheService,
+		private readonly utilityService: UtilityService,
 	) {
 		this.logger = this.loggerService.getLogger('server', 'gray');
 	}
@@ -125,7 +135,7 @@ export class ServerService implements OnApplicationShutdown {
 					return;
 				}
 
-				const effectiveLocation = process.env.NODE_ENV === 'production' ? location : location.replace(/^http:\/\//, 'https://');
+				const effectiveLocation = this.envService.env.NODE_ENV === 'production' ? location : location.replace(/^http:\/\//, 'https://');
 				if (effectiveLocation.startsWith(`https://${this.config.host}/`)) {
 					done();
 					return;
@@ -171,14 +181,15 @@ export class ServerService implements OnApplicationShutdown {
 				return;
 			}
 
-			const name = pathChunks.shift();
+			const name = pathChunks.shift() as string;
 			const host = pathChunks.pop();
 
-			const emoji = await this.emojisRepository.findOneBy({
+			const emojiKey = encodeEmojiKey({
 				// `@.` is the spec of ReactionService.decodeReaction
-				host: (host === undefined || host === '.') ? IsNull() : host,
+				host: (host === undefined || host === '.') ? null : host,
 				name: name,
 			});
+			const emoji = await this.customEmojiService.emojisByKeyCache.fetchMaybe(emojiKey);
 
 			reply.header('Content-Security-Policy', 'default-src \'none\'; style-src \'unsafe-inline\'');
 
@@ -212,18 +223,11 @@ export class ServerService implements OnApplicationShutdown {
 		});
 
 		fastify.get<{ Params: { acct: string } }>('/avatar/@:acct', async (request, reply) => {
-			const { username, host } = Acct.parse(request.params.acct);
-			const user = await this.usersRepository.findOne({
-				where: {
-					usernameLower: username.toLowerCase(),
-					host: (host == null) || (host === this.config.host) ? IsNull() : host,
-					isSuspended: false,
-				},
-			});
+			const user = await this.cacheService.findOptionalUserByAcct(request.params.acct);
 
 			reply.header('Cache-Control', 'public, max-age=86400');
 
-			if (user) {
+			if (user && this.utilityService.isActiveUser(user)) {
 				reply.redirect((user.avatarId == null ? null : user.avatarUrl) ?? this.userEntityService.getIdenticonUrl(user));
 			} else {
 				reply.redirect('/static-assets/user-unknown.png');
@@ -231,7 +235,7 @@ export class ServerService implements OnApplicationShutdown {
 		});
 
 		fastify.get<{ Params: { x: string } }>('/identicon/:x', (request, reply) => {
- 			reply.header('Content-Type', 'image/png');
+			reply.header('Content-Type', 'image/png');
 			reply.header('Cache-Control', 'public, max-age=86400');
 
 			if (this.meta.enableIdenticonGeneration) {
@@ -251,8 +255,9 @@ export class ServerService implements OnApplicationShutdown {
 					emailVerified: true,
 					emailVerifyCode: null,
 				});
+				await this.internalEventService.emit('updateUserProfile', { userId: profile.userId, keys: ['emailVerified', 'emailVerifyCode'] });
 
-				this.globalEventService.publishMainStream(profile.userId, 'meUpdated', await this.userEntityService.pack(profile.userId, { id: profile.userId }, {
+				await this.globalEventService.publishMainStream(profile.userId, 'meUpdated', await this.userEntityService.pack(profile.userId, { id: profile.userId }, {
 					schema: 'MeDetailed',
 					includeSecrets: true,
 				}));
@@ -309,19 +314,27 @@ export class ServerService implements OnApplicationShutdown {
 
 	@bindThis
 	public async dispose(): Promise<void> {
+		this.logger.info('Disconnecting WebSocket clients...');
 		await this.streamingApiServerService.detach();
-		await this.#fastify.close();
+
+		this.logger.info('Disconnecting HTTP clients....;');
+		await this.#fastify?.close();
+
+		this.logger.info('Server disposed.');
 	}
 
 	/**
 	 * Get the Fastify instance for testing.
 	 */
 	public get fastify(): FastifyInstance {
+		if (!this.#fastify) {
+			throw new Error('Cannot get fastify before starting server');
+		}
 		return this.#fastify;
 	}
 
 	@bindThis
-	async onApplicationShutdown(signal: string): Promise<void> {
+	public async beforeApplicationShutdown(signal: string): Promise<void> {
 		await this.dispose();
 	}
 }

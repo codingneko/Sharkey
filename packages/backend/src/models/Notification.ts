@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { userExportableEntities } from '@/types.js';
+import { userExportableEntities, userImportableEntities } from '@/types.js';
 import { MiUser } from './User.js';
 import { MiNote } from './Note.js';
 import { MiAccessToken } from './AccessToken.js';
@@ -93,6 +93,12 @@ export type MiNotification = {
 	exportedEntity: typeof userExportableEntities[number];
 	fileId: MiDriveFile['id'];
 } | {
+	type: 'importCompleted';
+	id: string;
+	createdAt: string;
+	importedEntity: typeof userImportableEntities[number];
+	fileId?: MiDriveFile['id'];
+} | {
 	type: 'login';
 	id: string;
 	createdAt: string;
@@ -146,6 +152,23 @@ export type MiNotification = {
 	id: string;
 	createdAt: string;
 	noteId: MiNote['id'];
+} | {
+	type: 'sharedAccessGranted';
+	id: string;
+	createdAt: string;
+	notifierId: MiUser['id'];
+	permCount: number;
+	rank: 'user' | 'mod' | 'admin' | null;
+} | {
+	type: 'sharedAccessRevoked';
+	id: string;
+	createdAt: string;
+	notifierId: MiUser['id'];
+} | {
+	type: 'sharedAccessLogin';
+	id: string;
+	createdAt: string;
+	notifierId: MiUser['id'];
 };
 
 export type MiGroupedNotification = MiNotification | {
