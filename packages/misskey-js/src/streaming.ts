@@ -1,11 +1,12 @@
 import { EventEmitter } from 'eventemitter3';
-import _ReconnectingWebSocket, { Options } from 'reconnecting-websocket';
+import ReconnectingWebSocket from 'reconnecting-websocket';
+import type { Options } from 'reconnecting-websocket';
 import type { BroadcastEvents, Channels } from './streaming.types.js';
 
 // コンストラクタとクラスそのものの定義が上手く解決出来ないため再定義
-const ReconnectingWebSocketConstructor = _ReconnectingWebSocket as unknown as typeof _ReconnectingWebSocket.default;
-type ReconnectingWebSocket = _ReconnectingWebSocket.default;
+const ReconnectingWebSocketConstructor = ReconnectingWebSocket as unknown as typeof ReconnectingWebSocket.default;
 
+// TODO can we just use URLSearchParams class?
 export function urlQuery(obj: Record<string, string | number | boolean | undefined>): string {
 	const params = Object.entries(obj)
 		.filter(([, v]) => Array.isArray(v) ? v.length : v !== undefined)
@@ -22,6 +23,8 @@ type AnyOf<T extends Record<PropertyKey, unknown>> = T[keyof T];
 export type StreamEvents = {
 	_connected_: void;
 	_disconnected_: void;
+	_ping_: void;
+	_pong_: void;
 } & BroadcastEvents;
 
 export interface IStream extends EventEmitter<StreamEvents> {
@@ -37,6 +40,7 @@ export interface IStream extends EventEmitter<StreamEvents> {
 	send(typeOrPayload: string | Record<string, unknown> | unknown[], payload?: unknown): void;
 	ping(): void;
 	heartbeat(): void;
+	pong(): void;
 	close(): void;
 }
 
@@ -45,7 +49,7 @@ export interface IStream extends EventEmitter<StreamEvents> {
  */
 // eslint-disable-next-line import/no-default-export
 export default class Stream extends EventEmitter<StreamEvents> implements IStream {
-	private stream: ReconnectingWebSocket;
+	private stream: ReconnectingWebSocket.default;
 	public state: 'initializing' | 'reconnecting' | 'connected' = 'initializing';
 	private sharedConnectionPools: Pool[] = [];
 	private sharedConnections: SharedConnection[] = [];
@@ -54,7 +58,7 @@ export default class Stream extends EventEmitter<StreamEvents> implements IStrea
 
 	constructor(origin: string, user: { token: string; } | null, options?: {
 		WebSocket?: Options['WebSocket'];
-		binaryType?: ReconnectingWebSocket['binaryType'];
+		binaryType?: 'arraybuffer' | 'blob';
 	}) {
 		super();
 
@@ -188,6 +192,11 @@ export default class Stream extends EventEmitter<StreamEvents> implements IStrea
 				c.emit(body.type, body.body);
 				c.inCount++;
 			}
+		} else if (type === 'ping') {
+			this.emit('_ping_');
+			this.pong();
+		} else if (type === 'pong') {
+			this.emit('_pong_');
 		} else {
 			this.emit(type, body);
 		}
@@ -204,7 +213,7 @@ export default class Stream extends EventEmitter<StreamEvents> implements IStrea
 		if (typeof typeOrPayload === 'string') {
 			this.stream.send(JSON.stringify({
 				type: typeOrPayload,
-				...(payload === undefined ? {} : { body: payload }),
+				body: payload,
 			}));
 			return;
 		}
@@ -213,11 +222,15 @@ export default class Stream extends EventEmitter<StreamEvents> implements IStrea
 	}
 
 	public ping(): void {
-		this.stream.send('ping');
+		this.send('ping');
 	}
 
 	public heartbeat(): void {
-		this.stream.send('h');
+		this.send('h');
+	}
+
+	public pong(): void {
+		this.send('pong');
 	}
 
 	/**

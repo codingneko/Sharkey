@@ -9,6 +9,7 @@ import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { bindThis } from '@/decorators.js';
 import { isRenotePacked, isQuotePacked } from '@/misc/is-renote.js';
 import type { JsonObject } from '@/misc/json-value.js';
+import { isPackedPureRenote } from '@/misc/is-renote.js';
 import { type Channel, type MiChannelService, NoteChannel } from '../channel.js';
 
 class ChannelChannel extends NoteChannel {
@@ -44,7 +45,7 @@ class ChannelChannel extends NoteChannel {
 	private async onNote(note: Packed<'Note'>) {
 		if (note.channelId !== this.channelId) return;
 		if (this.withFiles && (note.fileIds == null || note.fileIds.length === 0)) return;
-		if (!this.withRenotes && isRenotePacked(note) && !isQuotePacked(note)) return;
+		if (!this.withRenotes && isPackedPureRenote(note)) return;
 
 		const preparedNote = await this.prepareNote(note);
 		if (preparedNote) {

@@ -4,7 +4,7 @@
  */
 
 import { URL } from 'node:url';
-import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import httpSignature from '@peertube/http-signature';
 import * as Bull from 'bullmq';
 import type Logger from '@/logger.js';
@@ -29,21 +29,16 @@ import { DI } from '@/di-symbols.js';
 import { SkApInboxLog } from '@/models/_.js';
 import type { Config } from '@/config.js';
 import { ApLogService, calculateDurationSince } from '@/core/ApLogService.js';
-import { UpdateInstanceQueue } from '@/core/UpdateInstanceQueue.js';
 import { isRetryableError } from '@/misc/is-retryable-error.js';
 import { renderInlineError } from '@/misc/render-inline-error.js';
+import { QueueService } from '@/core/QueueService.js';
+import { trackPromise } from '@/misc/promise-tracker.js';
 import { QueueLoggerService } from '../QueueLoggerService.js';
 import type { InboxJobData } from '../types.js';
 
-type UpdateInstanceJob = {
-	latestRequestReceivedAt: Date,
-	shouldUnsuspend: boolean,
-};
-
 @Injectable()
-export class InboxProcessorService implements OnApplicationShutdown {
+export class InboxProcessorService {
 	private logger: Logger;
-	//private updateInstanceQueue: CollapsedQueue<MiNote['id'], UpdateInstanceJob>;
 
 	constructor(
 		@Inject(DI.meta)
@@ -64,7 +59,7 @@ export class InboxProcessorService implements OnApplicationShutdown {
 		private federationChart: FederationChart,
 		private queueLoggerService: QueueLoggerService,
 		private readonly apLogService: ApLogService,
-		private readonly updateInstanceQueue: UpdateInstanceQueue,
+		private readonly queueService: QueueService,
 	) {
 		this.logger = this.queueLoggerService.logger.createSubLogger('inbox');
 	}
@@ -100,8 +95,8 @@ export class InboxProcessorService implements OnApplicationShutdown {
 			log.duration = calculateDurationSince(startTime);
 
 			// Save or finalize asynchronously
-			this.apLogService.saveInboxLog(log)
-				.catch(err => this.logger.error('Failed to record AP activity:', err));
+			trackPromise(this.apLogService.saveInboxLog(log)
+				.catch(err => this.logger.error('Failed to record AP activity:', err)));
 		}
 	}
 
@@ -161,7 +156,12 @@ export class InboxProcessorService implements OnApplicationShutdown {
 
 		// publicKey がなくても終了
 		if (authUser.key == null) {
-			throw new Bull.UnrecoverableError(`skip: failed to resolve user publicKey ${actorId}`);
+			// See if a key has become available since we fetched the actor
+			authUser.key = await this.apDbResolverService.refetchPublicKeyForApId(authUser.user);
+			if (authUser.key == null) {
+				// If it's still missing, then give up
+				throw new Bull.UnrecoverableError(`skip: failed to resolve user publicKey ${actorId}`);
+			}
 		}
 
 		// HTTP-Signatureの検証
@@ -271,28 +271,8 @@ export class InboxProcessorService implements OnApplicationShutdown {
 			log.authUserId = authUser.user.id;
 		}
 
-		this.apRequestChart.inbox();
-		this.federationChart.inbox(authUser.user.host);
-
 		// Update instance stats
-		process.nextTick(async () => {
-			const i = await (this.meta.enableStatsForFederatedInstances
-				? this.federatedInstanceService.fetchOrRegister(authUser.user.host)
-				: this.federatedInstanceService.fetch(authUser.user.host));
-
-			if (i == null) return;
-
-			this.updateInstanceQueue.enqueue(i.id, {
-				latestRequestReceivedAt: new Date(),
-				shouldUnsuspend: i.suspensionState === 'autoSuspendedForNotResponding',
-			});
-
-			if (this.meta.enableChartsForFederatedInstances) {
-				this.instanceChart.requestReceived(i.host);
-			}
-
-			this.fetchInstanceMetadataService.fetchInstanceMetadata(i);
-		});
+		await this.queueService.createPostInboxJob(authUser.user.host);
 
 		// アクティビティを処理
 		try {
@@ -325,35 +305,5 @@ export class InboxProcessorService implements OnApplicationShutdown {
 			throw e;
 		}
 		return 'ok';
-	}
-
-	@bindThis
-	public collapseUpdateInstanceJobs(oldJob: UpdateInstanceJob, newJob: UpdateInstanceJob) {
-		const latestRequestReceivedAt = oldJob.latestRequestReceivedAt < newJob.latestRequestReceivedAt
-			? newJob.latestRequestReceivedAt
-			: oldJob.latestRequestReceivedAt;
-		const shouldUnsuspend = oldJob.shouldUnsuspend || newJob.shouldUnsuspend;
-		return {
-			latestRequestReceivedAt,
-			shouldUnsuspend,
-		};
-	}
-
-	@bindThis
-	public async performUpdateInstance(id: string, job: UpdateInstanceJob) {
-		await this.federatedInstanceService.update(id, {
-			latestRequestReceivedAt: new Date(),
-			isNotResponding: false,
-			// もしサーバーが死んでるために配信が止まっていた場合には自動的に復活させてあげる
-			suspensionState: job.shouldUnsuspend ? 'none' : undefined,
-		});
-	}
-
-	@bindThis
-	public async dispose(): Promise<void> {}
-
-	@bindThis
-	async onApplicationShutdown(signal?: string) {
-		await this.dispose();
 	}
 }

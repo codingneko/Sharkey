@@ -6,7 +6,9 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { Not, IsNull, DataSource } from 'typeorm';
 import type { MiUser } from '@/models/User.js';
+import { isLocalUser } from '@/models/User.js';
 import { AppLockService } from '@/core/AppLockService.js';
+import { TimeService } from '@/global/TimeService.js';
 import { DI } from '@/di-symbols.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import type { FollowingsRepository } from '@/models/_.js';
@@ -15,7 +17,6 @@ import Chart from '../core.js';
 import { ChartLoggerService } from '../ChartLoggerService.js';
 import { name, schema } from './entities/per-user-following.js';
 import type { KVs } from '../core.js';
-import { CacheService } from '@/core/CacheService.js';
 
 /**
  * ユーザーごとのフォローに関するチャート
@@ -32,24 +33,27 @@ export default class PerUserFollowingChart extends Chart<typeof schema> { // esl
 		private appLockService: AppLockService,
 		private userEntityService: UserEntityService,
 		private chartLoggerService: ChartLoggerService,
-		private readonly cacheService: CacheService,
+		private readonly timeService: TimeService,
 	) {
 		super(db, (k) => appLockService.getChartInsertLock(k), chartLoggerService.logger, name, schema, true);
 	}
 
+	protected getCurrentDate(): Date {
+		return this.timeService.date;
+	}
+
 	protected async tickMajor(group: string): Promise<Partial<KVs<typeof schema>>> {
 		const [
-			followees,
-			followers,
+			localFollowingsCount,
+			localFollowersCount,
+			remoteFollowingsCount,
+			remoteFollowersCount,
 		] = await Promise.all([
-			this.cacheService.userFollowingsCache.fetch(group).then(fs => Array.from(fs.values())),
-			this.cacheService.userFollowersCache.fetch(group).then(fs => Array.from(fs.values())),
+			this.followingsRepository.countBy({ followerId: group, followeeHost: IsNull() }),
+			this.followingsRepository.countBy({ followeeId: group, followerHost: IsNull() }),
+			this.followingsRepository.countBy({ followerId: group, followeeHost: Not(IsNull()) }),
+			this.followingsRepository.countBy({ followeeId: group, followerHost: Not(IsNull()) }),
 		]);
-
-		const localFollowingsCount = followees.reduce((sum, f) => sum + (f.followeeHost == null ? 1 : 0), 0);
-		const localFollowersCount = followers.reduce((sum, f) => sum + (f.followerHost == null ? 1 : 0), 0);
-		const remoteFollowingsCount = followees.reduce((sum, f) => sum + (f.followeeHost == null ? 0 : 1), 0);
-		const remoteFollowersCount = followers.reduce((sum, f) => sum + (f.followerHost == null ? 0 : 1), 0);
 
 		return {
 			'local.followings.total': localFollowingsCount,
@@ -64,9 +68,9 @@ export default class PerUserFollowingChart extends Chart<typeof schema> { // esl
 	}
 
 	@bindThis
-	public async update(follower: { id: MiUser['id']; host: MiUser['host']; }, followee: { id: MiUser['id']; host: MiUser['host']; }, isFollow: boolean): Promise<void> {
-		const prefixFollower = this.userEntityService.isLocalUser(follower) ? 'local' : 'remote';
-		const prefixFollowee = this.userEntityService.isLocalUser(followee) ? 'local' : 'remote';
+	public update(follower: { id: MiUser['id']; host: MiUser['host']; }, followee: { id: MiUser['id']; host: MiUser['host']; }, isFollow: boolean): void {
+		const prefixFollower = isLocalUser(follower) ? 'local' : 'remote';
+		const prefixFollowee = isLocalUser(followee) ? 'local' : 'remote';
 
 		this.commit({
 			[`${prefixFollower}.followings.total`]: isFollow ? 1 : -1,

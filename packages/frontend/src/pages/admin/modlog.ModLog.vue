@@ -22,14 +22,15 @@ SPDX-License-Identifier: AGPL-3.0-only
 					'importCustomEmojis',
 					'createPromo',
 					'addRelay',
+					'restartMigration',
 				].includes(log.type),
 				[$style.logYellow]: [
 					'markSensitiveDriveFile',
 					'resetPassword',
 					'setMandatoryCW',
+					'setMandatoryCWForNote',
+					'setMandatoryCWForInstance',
 					'suspendRemoteInstance',
-					'setRemoteInstanceNSFW',
-					'unsetRemoteInstanceNSFW',
 					'rejectRemoteInstanceReports',
 					'acceptRemoteInstanceReports',
 					'rejectQuotesUser',
@@ -65,9 +66,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 					'clearInstanceFiles',
 					'severFollowRelations',
 					'removeRelay',
+					'setRoot',
 				].includes(log.type)
 			}"
-		>{{ i18n.ts._moderationLogTypes[log.type] }}</b>
+		>{{ i18n.ts._moderationLogTypes[log.type] ?? log.type }}</b>
 		<span v-if="log.type === 'updateUserNote'">: @{{ log.info.userUsername }}{{ log.info.userHost ? '@' + log.info.userHost : '' }}</span>
 		<span v-else-if="log.type === 'suspend'">: @{{ log.info.userUsername }}{{ log.info.userHost ? '@' + log.info.userHost : '' }}</span>
 		<span v-else-if="log.type === 'approve'">: @{{ log.info.userUsername }}{{ log.info.userHost ? '@' + log.info.userHost : '' }}</span>
@@ -79,6 +81,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<span v-else-if="log.type === 'unsuspend'">: @{{ log.info.userUsername }}{{ log.info.userHost ? '@' + log.info.userHost : '' }}</span>
 		<span v-else-if="log.type === 'resetPassword'">: @{{ log.info.userUsername }}{{ log.info.userHost ? '@' + log.info.userHost : '' }}</span>
 		<span v-else-if="log.type === 'setMandatoryCW'">: @{{ log.info.userUsername }}{{ log.info.userHost ? '@' + log.info.userHost : '' }}</span>
+		<span v-else-if="log.type === 'setMandatoryCWForNote'">: @{{ log.info.noteUserUsername }}{{ log.info.noteUserHost ? '@' + log.info.noteUserHost : '' }}</span>
+		<span v-else-if="log.type === 'setMandatoryCWForInstance'">: {{ log.info.host }}</span>
 		<span v-else-if="log.type === 'assignRole'">: @{{ log.info.userUsername }}{{ log.info.userHost ? '@' + log.info.userHost : '' }} <i class="ti ti-arrow-right"></i> {{ log.info.roleName }}</span>
 		<span v-else-if="log.type === 'unassignRole'">: @{{ log.info.userUsername }}{{ log.info.userHost ? '@' + log.info.userHost : '' }} <i class="ti ti-equal-not"></i> {{ log.info.roleName }}</span>
 		<span v-else-if="log.type === 'createRole'">: {{ log.info.role.name }}</span>
@@ -91,8 +95,6 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<span v-else-if="log.type === 'unmarkSensitiveDriveFile'">: @{{ log.info.fileUserUsername }}{{ log.info.fileUserHost ? '@' + log.info.fileUserHost : '' }}</span>
 		<span v-else-if="log.type === 'suspendRemoteInstance'">: {{ log.info.host }}</span>
 		<span v-else-if="log.type === 'unsuspendRemoteInstance'">: {{ log.info.host }}</span>
-		<span v-else-if="log.type === 'setRemoteInstanceNSFW'">: {{ log.info.host }}</span>
-		<span v-else-if="log.type === 'unsetRemoteInstanceNSFW'">: {{ log.info.host }}</span>
 		<span v-else-if="log.type === 'rejectRemoteInstanceReports'">: {{ log.info.host }}</span>
 		<span v-else-if="log.type === 'acceptRemoteInstanceReports'">: {{ log.info.host }}</span>
 		<span v-else-if="log.type === 'createGlobalAnnouncement'">: {{ log.info.announcement.title }}</span>
@@ -130,6 +132,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<span v-else-if="log.type === 'createPromo'">: @{{ log.info.noteUserUsername }}{{ log.info.noteUserHost ? '@' + log.info.noteUserHost : '' }}</span>
 		<span v-else-if="log.type === 'addRelay'">: {{ log.info.inbox }}</span>
 		<span v-else-if="log.type === 'removeRelay'">: {{ log.info.inbox }}</span>
+		<span v-else-if="log.type === 'restartMigration'">: @{{ log.info.userUsername }}{{ log.info.userHost ? '@' + log.info.userHost : '' }}</span>
+		<span v-else-if="log.type === 'setRoot'">: {{ log.info.after.userUsername }}</span>
 	</template>
 	<template #icon>
 		<i v-if="log.type === 'updateServerSettings'" class="ti ti-settings"></i>
@@ -174,6 +178,8 @@ SPDX-License-Identifier: AGPL-3.0-only
 		<i v-else-if="log.type === 'deleteFlash'" class="ti ti-trash"></i>
 		<i v-else-if="log.type === 'deleteGalleryPost'" class="ti ti-trash"></i>
 		<i v-else-if="log.type === 'deleteChatRoom'" class="ti ti-trash"></i>
+		<i v-else-if="log.type === 'restartMigration'" class="ph-airplane-takeoff ph-bold ph-lg"></i>
+		<i v-else-if="log.type === 'setRoot'" class="ph-lightning ph-bold ph-lg"></i>
 	</template>
 	<template #suffix>
 		<MkTime :time="log.createdAt"/>
@@ -208,7 +214,22 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<CodeDiff :context="0" :hideHeader="true" :oldString="log.info.oldCW ?? ''" :newString="log.info.newCW ?? ''" maxHeight="150px"/>
 			</div>
 		</template>
+		<template v-else-if="log.type === 'setMandatoryCWForNote'">
+			<div>{{ i18n.ts.user }}: <MkA :to="`/admin/user/${log.info.noteUserId}`" class="_link">@{{ log.info.noteUserUsername }}{{ log.info.noteUserHost ? '@' + log.info.noteUserHost : '' }}</MkA></div>
+			<div>{{ i18n.ts.note }}: <MkA :to="`/notes/${log.info.noteId}`" class="_link">{{ log.info.noteId }}</MkA></div>
+			<div :class="$style.diff">
+				<CodeDiff :context="0" :hideHeader="true" :oldString="log.info.oldCW ?? ''" :newString="log.info.newCW ?? ''" maxHeight="150px"/>
+			</div>
+		</template>
+		<template v-else-if="log.type === 'setMandatoryCWForInstance'">
+			<div :class="$style.diff">
+				<CodeDiff :context="0" :hideHeader="true" :oldString="log.info.oldCW ?? ''" :newString="log.info.newCW ?? ''" maxHeight="150px"/>
+			</div>
+		</template>
 		<template v-else-if="log.type === 'unsuspend'">
+			<div>{{ i18n.ts.user }}: <MkA :to="`/admin/user/${log.info.userId}`" class="_link">@{{ log.info.userUsername }}{{ log.info.userHost ? '@' + log.info.userHost : '' }}</MkA></div>
+		</template>
+		<template v-else-if="log.type === 'restartMigration'">
 			<div>{{ i18n.ts.user }}: <MkA :to="`/admin/user/${log.info.userId}`" class="_link">@{{ log.info.userUsername }}{{ log.info.userHost ? '@' + log.info.userHost : '' }}</MkA></div>
 		</template>
 		<template v-else-if="log.type === 'rejectQuotesUser'">
@@ -322,6 +343,14 @@ SPDX-License-Identifier: AGPL-3.0-only
 				<CodeDiff :context="5" :hideHeader="true" :oldString="log.info.before ?? ''" :newString="log.info.after ?? ''" maxHeight="300px"/>
 			</div>
 		</template>
+		<template v-else-if="log.type === 'setRoot'">
+			<div>
+				<p>{{ i18n.ts.previousRootUser }}: <MkA :to="`/admin/user/${log.info.before.userId}`" class="_link">@{{ log.info.before.userUsername }}</MkA></p>
+				<p>{{ i18n.ts.newRootUser }}: <MkA :to="`/admin/user/${log.info.after.userId}`" class="_link">@{{ log.info.after.userUsername }}</MkA></p>
+			</div>
+		</template>
+
+		<MkUrlPreview v-if="'noteId' in log.info" :url="`${url}/notes/${log.info.noteId}`" :compact="false" :detail="false" :showAsQuote="true"></MkUrlPreview>
 
 		<details>
 			<summary>raw</summary>
@@ -338,6 +367,8 @@ import JSON5 from 'json5';
 import { i18n } from '@/i18n.js';
 import MkFolder from '@/components/MkFolder.vue';
 import SkFetchNote from '@/components/SkFetchNote.vue';
+import MkUrlPreview from '@/components/MkUrlPreview.vue';
+import { url } from '@@/js/config.js';
 
 const props = defineProps<{
 	log: Misskey.entities.ModerationLog;

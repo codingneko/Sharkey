@@ -184,6 +184,10 @@ export const packedRolePoliciesSchema = {
 			type: 'boolean',
 			optional: false, nullable: false,
 		},
+		scheduleNoteMax: {
+			type: 'integer',
+			optional: false, nullable: false,
+		},
 		mentionLimit: {
 			type: 'integer',
 			optional: false, nullable: false,
@@ -217,6 +221,10 @@ export const packedRolePoliciesSchema = {
 			optional: false, nullable: false,
 		},
 		canUseTranslator: {
+			type: 'boolean',
+			optional: false, nullable: false,
+		},
+		canFetchLBMetadata: {
 			type: 'boolean',
 			optional: false, nullable: false,
 		},
@@ -276,6 +284,10 @@ export const packedRolePoliciesSchema = {
 			type: 'integer',
 			optional: false, nullable: false,
 		},
+		canImportNotes: {
+			type: 'boolean',
+			optional: false, nullable: false,
+		},
 		avatarDecorationLimit: {
 			type: 'integer',
 			optional: false, nullable: false,
@@ -300,16 +312,16 @@ export const packedRolePoliciesSchema = {
 			type: 'boolean',
 			optional: false, nullable: false,
 		},
-		scheduleNoteMax: {
-			type: 'integer',
-			optional: false, nullable: false,
-		},
 		chatAvailability: {
 			type: 'string',
 			optional: false, nullable: false,
 			enum: ['available', 'readonly', 'unavailable'],
 		},
 		canTrend: {
+			type: 'boolean',
+			optional: false, nullable: false,
+		},
+		canViewFederation: {
 			type: 'boolean',
 			optional: false, nullable: false,
 		},

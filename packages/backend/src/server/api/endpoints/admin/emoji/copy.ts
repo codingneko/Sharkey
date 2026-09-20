@@ -66,7 +66,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private driveService: DriveService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
-			const emoji = await this.emojisRepository.findOneBy({ id: ps.emojiId });
+			const emoji = await this.customEmojiService.emojisByIdCache.fetchMaybe(ps.emojiId);
 			if (emoji == null) {
 				throw new ApiError(meta.errors.noSuchEmoji);
 			}
@@ -86,10 +86,9 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			const isDuplicate = await this.customEmojiService.checkDuplicate(nameNfc);
 			if (isDuplicate) throw new ApiError(meta.errors.duplicateName);
 
-			const addedEmoji = await this.customEmojiService.add({
+			const addedEmoji = await this.customEmojiService.createEmoji({
 				originalUrl: driveFile.url,
 				publicUrl: driveFile.webpublicUrl ?? driveFile.url,
-				fileType: driveFile.webpublicType ?? driveFile.type,
 				name: nameNfc,
 				category: emoji.category?.normalize('NFC') ?? null,
 				aliases: emoji.aliases.map(a => a.normalize('NFC')),
@@ -98,9 +97,9 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				isSensitive: emoji.isSensitive,
 				localOnly: emoji.localOnly,
 				roleIdsThatCanBeUsedThisEmojiAsReaction: emoji.roleIdsThatCanBeUsedThisEmojiAsReaction,
-			}, me);
+			}, { moderator: me });
 
-			return this.emojiEntityService.packDetailed(addedEmoji);
+			return await this.emojiEntityService.packDetailed(addedEmoji);
 		});
 	}
 }

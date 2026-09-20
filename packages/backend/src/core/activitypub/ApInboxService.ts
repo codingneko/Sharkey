@@ -27,17 +27,14 @@ import { QueueService } from '@/core/QueueService.js';
 import type { UsersRepository, NotesRepository, FollowingsRepository, AbuseUserReportsRepository, FollowRequestsRepository, MiMeta } from '@/models/_.js';
 import { bindThis } from '@/decorators.js';
 import type { MiRemoteUser } from '@/models/User.js';
-import { GlobalEventService } from '@/core/GlobalEventService.js';
 import { AbuseReportService } from '@/core/AbuseReportService.js';
 import { FederatedInstanceService } from '@/core/FederatedInstanceService.js';
+import { DeleteAccountService } from '@/core/DeleteAccountService.js';
 import { fromTuple } from '@/misc/from-tuple.js';
-import { IdentifiableError } from '@/misc/identifiable-error.js';
+import { IdentifiableError, errorCodes } from '@/misc/identifiable-error.js';
 import { renderInlineError } from '@/misc/render-inline-error.js';
-import InstanceChart from '@/core/chart/charts/instance.js';
-import FederationChart from '@/core/chart/charts/federation.js';
-import { FetchInstanceMetadataService } from '@/core/FetchInstanceMetadataService.js';
-import { UpdateInstanceQueue } from '@/core/UpdateInstanceQueue.js';
 import { CacheService } from '@/core/CacheService.js';
+import { NoteVisibilityService } from '@/core/NoteVisibilityService.js';
 import { getApHrefNullable, getApId, getApIds, getApType, getNullableApId, isAccept, isActor, isAdd, isAnnounce, isApObject, isBlock, isCollectionOrOrderedCollection, isCreate, isDelete, isFlag, isFollow, isLike, isDislike, isMove, isPost, isReject, isRemove, isTombstone, isUndo, isUpdate, validActor, validPost, isActivity, IObjectWithId } from './type.js';
 import { ApNoteService } from './models/ApNoteService.js';
 import { ApLoggerService } from './ApLoggerService.js';
@@ -93,13 +90,10 @@ export class ApInboxService {
 		private apPersonService: ApPersonService,
 		private apQuestionService: ApQuestionService,
 		private queueService: QueueService,
-		private globalEventService: GlobalEventService,
 		private readonly federatedInstanceService: FederatedInstanceService,
-		private readonly fetchInstanceMetadataService: FetchInstanceMetadataService,
-		private readonly instanceChart: InstanceChart,
-		private readonly federationChart: FederationChart,
-		private readonly updateInstanceQueue: UpdateInstanceQueue,
 		private readonly cacheService: CacheService,
+		private readonly noteVisibilityService: NoteVisibilityService,
+		private readonly deleteAccountService: DeleteAccountService,
 	) {
 		this.logger = this.apLoggerService.logger;
 	}
@@ -111,7 +105,7 @@ export class ApInboxService {
 			const results = [] as [string, string | void][];
 			resolver ??= this.apResolverService.createResolver();
 
-			const items = await resolver.resolveCollectionItems(activity);
+			const items = await resolver.resolveCollectionItems(activity, true, getNullableApId(activity) ?? undefined);
 			for (let i = 0; i < items.length; i++) {
 				const act = items[i];
 				if (act.id != null) {
@@ -147,13 +141,12 @@ export class ApInboxService {
 		}
 
 		// ついでにリモートユーザーの情報が古かったら更新しておく
-		if (actor.uri) {
-			if (actor.lastFetchedAt == null || Date.now() - actor.lastFetchedAt.getTime() > 1000 * 60 * 60 * 24) {
-				setImmediate(() => {
+		{
+			{
+				{
 					// 同一ユーザーの情報を再度処理するので、使用済みのresolverを再利用してはいけない
-					this.apPersonService.updatePerson(actor.uri)
-						.catch(err => this.logger.error(`Failed to update person: ${renderInlineError(err)}`));
-				});
+					await this.apPersonService.updatePersonLazy(actor);
+				}
 			}
 		}
 		return result;
@@ -367,7 +360,8 @@ export class ApInboxService {
 			const renote = await this.apNoteService.resolveNote(target, { resolver, sentFrom: getApId(target) });
 			if (renote == null) return 'announce target is null';
 
-			if (!await this.noteEntityService.isVisibleForMe(renote, actor.id, { me: actor })) {
+			const { accessible } = await this.noteVisibilityService.checkNoteVisibilityAsync(renote, actor);
+			if (!accessible) {
 				return 'skip: invalid actor for this activity';
 			}
 
@@ -394,7 +388,7 @@ export class ApInboxService {
 				uri,
 			});
 		} finally {
-			unlock();
+			await unlock();
 		}
 	}
 
@@ -419,42 +413,14 @@ export class ApInboxService {
 		}
 
 		// Update stats (adapted from InboxProcessorService)
-		this.federationChart.inbox(actor.host).then();
-		process.nextTick(async () => {
-			const i = await (this.meta.enableStatsForFederatedInstances
-				? this.federatedInstanceService.fetchOrRegister(actor.host)
-				: this.federatedInstanceService.fetch(actor.host));
-
-			if (i == null) return;
-
-			this.updateInstanceQueue.enqueue(i.id, {
-				latestRequestReceivedAt: new Date(),
-				shouldUnsuspend: i.suspensionState === 'autoSuspendedForNotResponding',
-			});
-
-			if (this.meta.enableChartsForFederatedInstances) {
-				this.instanceChart.requestReceived(i.host).then();
-			}
-
-			this.fetchInstanceMetadataService.fetchInstanceMetadata(i).then();
-		});
+		await this.queueService.createPostInboxJob(actor.host);
 
 		// Process it!
-		return await this.performOneActivity(actor, activity, resolver)
-			.finally(() => {
-				// Update user (adapted from performActivity)
-				if (actor.lastFetchedAt == null || Date.now() - actor.lastFetchedAt.getTime() > 1000 * 60 * 60 * 24) {
-					setImmediate(() => {
-						// Don't re-use the resolver, or it may throw recursion errors.
-						// Instead, create a new resolver with an appropriately-reduced recursion limit.
-						const subResolver = this.apResolverService.createResolver({
-							recursionLimit: resolver.getRecursionLimit() - resolver.getHistory().length,
-						});
-						this.apPersonService.updatePerson(actor.uri, subResolver)
-							.catch(err => this.logger.error(`Failed to update person: ${renderInlineError(err)}`));
-					});
-				}
-			});
+		try {
+			return await this.performOneActivity(actor, activity, resolver);
+		} finally {
+			await this.apPersonService.updatePersonLazy(actor);
+		}
 	}
 
 	@bindThis
@@ -471,7 +437,7 @@ export class ApInboxService {
 			return 'skip: ブロックしようとしているユーザーはローカルユーザーではありません';
 		}
 
-		await this.userBlockingService.block(await this.usersRepository.findOneByOrFail({ id: actor.id }), await this.usersRepository.findOneByOrFail({ id: blockee.id }));
+		await this.userBlockingService.block(actor, blockee);
 		return 'ok';
 	}
 
@@ -544,7 +510,7 @@ export class ApInboxService {
 			await this.apNoteService.createNote(note, actor, resolver, silent);
 			return 'ok';
 		} finally {
-			unlock();
+			await unlock();
 		}
 	}
 
@@ -592,20 +558,15 @@ export class ApInboxService {
 
 	@bindThis
 	private async deleteActor(actor: MiRemoteUser, uri: string): Promise<string> {
-		this.logger.info(`Deleting the Actor: ${uri}`);
-
 		if (actor.uri !== uri) {
-			return `skip: delete actor ${actor.uri} !== ${uri}`;
+			throw new IdentifiableError(errorCodes.apValidationFailed, `skip: Delete(Person) failed - actor ${actor.id} (${actor.uri}) cannot delete other actor ${uri}`);
 		}
 
-		if (!(await this.usersRepository.update({ id: actor.id, isDeleted: false }, { isDeleted: true })).affected) {
-			return 'skip: already deleted or actor not found';
+		if (actor.isDeleted) {
+			return 'skip: already deleted';
 		}
 
-		const job = await this.queueService.createDeleteAccountJob(actor);
-
-		this.globalEventService.publishInternalEvent('remoteUserUpdated', { id: actor.id });
-
+		const job = await this.deleteAccountService.deleteAccount(actor);
 		return `ok: queued ${job.name} ${job.id}`;
 	}
 
@@ -629,7 +590,7 @@ export class ApInboxService {
 			await this.noteDeleteService.delete(actor, note);
 			return 'ok: note deleted';
 		} finally {
-			unlock();
+			await unlock();
 		}
 	}
 
@@ -649,14 +610,12 @@ export class ApInboxService {
 			.filter(uri => uri.startsWith(this.config.url + '/users/'))
 			.map(uri => uri.split('/').at(-1))
 			.filter(x => x != null);
-		const users = await this.usersRepository.findBy({
-			id: In(userIds),
-		});
-		if (users.length < 1) return 'skip';
+		const user = (await this.cacheService.findUsersById(userIds)).values().take(1).toArray().at(0);
+		if (!user) return 'skip';
 
 		await this.abuseReportService.report([{
-			targetUserId: users[0].id,
-			targetUserHost: users[0].host,
+			targetUserId: user.id,
+			targetUserHost: user.host,
 			reporterId: actor.id,
 			reporterHost: actor.host,
 			comment: `${activity.content}\n${JSON.stringify(uris, null, 2)}`,
@@ -768,7 +727,7 @@ export class ApInboxService {
 			return 'skip: follower not found';
 		}
 
-		const isFollowing = await this.cacheService.userFollowingsCache.fetch(follower.id).then(f => f.has(actor.id));
+		const isFollowing = await this.cacheService.isFollowing(follower, actor);
 
 		if (isFollowing) {
 			await this.userFollowingService.unfollow(follower, actor);
@@ -805,7 +764,7 @@ export class ApInboxService {
 			return 'skip: ブロック解除しようとしているユーザーはローカルユーザーではありません';
 		}
 
-		await this.userBlockingService.unblock(await this.usersRepository.findOneByOrFail({ id: actor.id }), blockee);
+		await this.userBlockingService.unblock(actor, blockee);
 		return 'ok';
 	}
 
@@ -827,7 +786,7 @@ export class ApInboxService {
 			},
 		});
 
-		const isFollowing = await this.cacheService.userFollowingsCache.fetch(actor.id).then(f => f.has(followee.id));
+		const isFollowing = await this.cacheService.isFollowing(actor, followee);
 
 		if (requestExist) {
 			await this.userFollowingService.cancelFollowRequest(followee, actor);

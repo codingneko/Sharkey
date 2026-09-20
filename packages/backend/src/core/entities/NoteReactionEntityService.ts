@@ -23,7 +23,6 @@ export class NoteReactionEntityService implements OnModuleInit {
 	private userEntityService: UserEntityService;
 	private noteEntityService: NoteEntityService;
 	private reactionService: ReactionService;
-	private idService: IdService;
 
 	constructor(
 		private moduleRef: ModuleRef,
@@ -31,18 +30,15 @@ export class NoteReactionEntityService implements OnModuleInit {
 		@Inject(DI.noteReactionsRepository)
 		private noteReactionsRepository: NoteReactionsRepository,
 
-		//private userEntityService: UserEntityService,
-		//private noteEntityService: NoteEntityService,
-		//private reactionService: ReactionService,
-		//private idService: IdService,
+		private readonly idService: IdService,
 	) {
 	}
 
-	onModuleInit() {
+	@bindThis
+	public onModuleInit() {
 		this.userEntityService = this.moduleRef.get('UserEntityService');
 		this.noteEntityService = this.moduleRef.get('NoteEntityService');
 		this.reactionService = this.moduleRef.get('ReactionService');
-		this.idService = this.moduleRef.get('IdService');
 	}
 
 	@bindThis
@@ -87,6 +83,6 @@ export class NoteReactionEntityService implements OnModuleInit {
 		const _users = reactions.map(({ user, userId }) => user ?? userId);
 		const _userMap = await this.userEntityService.packMany(_users, me)
 			.then(users => new Map(users.map(u => [u.id, u])));
-		return Promise.all(reactions.map(reaction => this.pack(reaction, me, opts, { packedUser: _userMap.get(reaction.userId) })));
+		return await Promise.all(reactions.map(reaction => this.pack(reaction, me, opts, { packedUser: _userMap.get(reaction.userId) })));
 	}
 }

@@ -51,10 +51,11 @@ export const meta = {
 		},
 	},
 
-	// 5 calls per second
+	// Up to 20 calls, then 4/second
 	limit: {
-		duration: 1000,
-		max: 5,
+		type: 'bucket',
+		size: 20,
+		dripRate: 250,
 	},
 } as const;
 
@@ -63,7 +64,6 @@ export const paramDef = {
 	properties: {
 		userId: { type: 'string', format: 'misskey:id' },
 		withReplies: { type: 'boolean', default: false },
-		withRepliesToSelf: { type: 'boolean', default: true },
 		withQuotes: { type: 'boolean', default: true },
 		withRenotes: { type: 'boolean', default: true },
 		withBots: { type: 'boolean', default: true },
@@ -102,12 +102,10 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 			if (ps.withReplies && ps.withFiles) throw new ApiError(meta.errors.bothWithRepliesAndWithFiles);
 
-			// early return if me is blocked by requesting user
-			if (me != null) {
-				const userIdsWhoBlockingMe = await this.cacheService.userBlockedCache.fetch(me.id);
-				if (userIdsWhoBlockingMe.has(ps.userId)) {
-					return [];
-				}
+			// early return if me is blocked by requested user
+			const isBlocked = me != null && (await this.cacheService.getUserRelation(me.id, ps.userId)).isBlocked;
+			if (isBlocked) {
+				return [];
 			}
 
 			if (!this.serverSettings.enableFanoutTimeline) {
@@ -122,8 +120,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 					withQuotes: ps.withQuotes,
 					withBots: ps.withBots,
 					withNonPublic: ps.withNonPublic,
-					withRepliesToOthers: ps.withReplies,
-					withRepliesToSelf: ps.withRepliesToSelf,
+					withReplies: ps.withReplies,
 				}, me);
 
 				return await this.noteEntityService.packMany(timeline, me);
@@ -133,8 +130,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 			if (ps.withReplies) redisTimelines.push(`userTimelineWithReplies:${ps.userId}`);
 			if (ps.withChannelNotes) redisTimelines.push(`userTimelineWithChannel:${ps.userId}`);
-
-			const isFollowing = me && (await this.cacheService.userFollowingsCache.fetch(me.id)).has(ps.userId);
 
 			const timeline = await this.fanoutTimelineEndpointService.timeline({
 				untilId,
@@ -146,17 +141,14 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				useDbFallback: true,
 				ignoreAuthorFromMute: true,
 				ignoreAuthorFromInstanceBlock: true,
-				excludeReplies: ps.withChannelNotes && !ps.withReplies, // userTimelineWithChannel may include replies
-				excludeNoFiles: ps.withChannelNotes && ps.withFiles, // userTimelineWithChannel may include notes without files
+				ignoreAuthorFromUserSuspension: true,
+				ignoreAuthorFromUserSilence: true,
+				excludeReplies: !ps.withChannelNotes && !ps.withReplies, // userTimelineWithChannel may include replies
+				excludeNoFiles: !ps.withChannelNotes && ps.withFiles, // userTimelineWithChannel may include notes without files
 				excludePureRenotes: !ps.withRenotes,
 				excludeBots: !ps.withBots,
 				noteFilter: note => {
 					if (note.channel?.isSensitive && !isSelf) return false;
-					if (note.visibility === 'specified' && (!me || (me.id !== note.userId && !note.visibleUserIds.some(v => v === me.id)))) return false;
-					if (note.visibility === 'followers' && !isFollowing && !isSelf) return false;
-
-					// These are handled by DB fallback, but we duplicate them here in case a timeline was already populated with notes
-					if (!ps.withRepliesToSelf && note.reply?.userId === note.userId) return false;
 					if (!ps.withQuotes && isRenote(note) && isQuote(note)) return false;
 					if (!ps.withNonPublic && note.visibility !== 'public') return false;
 
@@ -173,8 +165,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 					withQuotes: ps.withQuotes,
 					withBots: ps.withBots,
 					withNonPublic: ps.withNonPublic,
-					withRepliesToOthers: ps.withReplies,
-					withRepliesToSelf: ps.withRepliesToSelf,
+					withReplies: ps.withReplies,
 				}, me),
 			});
 
@@ -193,8 +184,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		withQuotes: boolean,
 		withBots: boolean,
 		withNonPublic: boolean,
-		withRepliesToOthers: boolean,
-		withRepliesToSelf: boolean,
+		withReplies: boolean,
 	}, me: MiLocalUser | null) {
 		const isSelf = me && (me.id === ps.userId);
 
@@ -217,11 +207,13 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			query.andWhere('note.channelId IS NULL');
 		}
 
-		this.queryService.generateVisibilityQuery(query, me);
 		this.queryService.generateBlockedHostQueryForNote(query, true);
+		this.queryService.generateSuspendedUserQueryForNote(query, true);
+		this.queryService.generateSilencedUserQueryForNotes(query, me, true);
 		if (me) {
-			this.queryService.generateMutedUserQueryForNotes(query, me, { id: ps.userId });
+			this.queryService.generateMutedUserQueryForNotes(query, me, true);
 			this.queryService.generateBlockedUserQueryForNotes(query, me);
+			this.queryService.generateMutedNoteThreadQuery(query, me);
 		}
 
 		if (ps.withFiles) {
@@ -236,16 +228,14 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			this.queryService.andIsNotQuote(query, 'note');
 		}
 
-		if (!ps.withRepliesToOthers && !ps.withRepliesToSelf) {
-			query.andWhere('reply.id IS NULL');
-		} else if (!ps.withRepliesToOthers) {
-			query.andWhere('(reply.id IS NULL OR reply."userId" = note."userId")');
-		} else if (!ps.withRepliesToSelf) {
-			query.andWhere('(reply.id IS NULL OR reply."userId" != note."userId")');
+		if (!ps.withReplies) {
+			this.queryService.generateExcludedRepliesQueryForNotes(query, me);
 		}
 
 		if (!ps.withNonPublic) {
 			query.andWhere('note.visibility = \'public\'');
+		} else {
+			this.queryService.generateVisibilityQuery(query, me);
 		}
 
 		if (!ps.withBots) {

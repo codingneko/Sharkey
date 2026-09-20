@@ -16,8 +16,9 @@ import { UtilityService } from '@/core/UtilityService.js';
 import { bindThis } from '@/decorators.js';
 import { renderInlineError } from '@/misc/render-inline-error.js';
 import { QueueLoggerService } from '../QueueLoggerService.js';
+import { NotificationService } from '@/core/NotificationService.js';
 import type * as Bull from 'bullmq';
-import type { DbUserImportJobData } from '../types.js';
+import type { DbImportMutingJobData } from '../types.js';
 
 @Injectable()
 export class ImportMutingProcessorService {
@@ -35,12 +36,13 @@ export class ImportMutingProcessorService {
 		private remoteUserResolveService: RemoteUserResolveService,
 		private downloadService: DownloadService,
 		private queueLoggerService: QueueLoggerService,
+		private notificationService: NotificationService,
 	) {
 		this.logger = this.queueLoggerService.logger.createSubLogger('import-muting');
 	}
 
 	@bindThis
-	public async process(job: Bull.Job<DbUserImportJobData>): Promise<void> {
+	public async process(job: Bull.Job<DbImportMutingJobData>): Promise<void> {
 		const user = await this.usersRepository.findOneBy({ id: job.data.user.id });
 		if (user == null) {
 			this.logger.debug(`Skip: user ${job.data.user.id} does not exist`);
@@ -98,6 +100,11 @@ export class ImportMutingProcessorService {
 				this.logger.warn(`Error in line:${linenum} ${renderInlineError(e)}`);
 			}
 		}
+
+		this.notificationService.createNotification(job.data.user.id, 'importCompleted', {
+			importedEntity: 'muting',
+			fileId: file.id,
+		});
 
 		this.logger.debug('Imported');
 	}

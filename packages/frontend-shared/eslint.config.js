@@ -5,11 +5,10 @@ import pluginVue from 'eslint-plugin-vue';
 import pluginMisskey from '@misskey-dev/eslint-plugin';
 import sharedConfig from '../shared/eslint.config.js';
 
-// eslint-disable-next-line import/no-default-export
 export default [
 	...sharedConfig,
 	{
-		files: ['**/*.vue'],
+		files: ['js/**/*.vue'],
 		...pluginMisskey.configs.typescript,
 	},
 	...pluginVue.configs['flat/recommended'],
@@ -17,7 +16,7 @@ export default [
 		files: [
 			'@types/**/*.ts',
 			'js/**/*.ts',
-			'**/*.vue',
+			'js/**/*.vue',
 		],
 		languageOptions: {
 			globals: {
@@ -43,7 +42,7 @@ export default [
 			parserOptions: {
 				extraFileExtensions: ['.vue'],
 				parser: tsParser,
-				project: ['./tsconfig.json'],
+				project: ['./tsconfig.web.json'],
 				sourceType: 'module',
 				tsconfigRootDir: import.meta.dirname,
 			},
@@ -52,7 +51,6 @@ export default [
 			'@typescript-eslint/no-empty-interface': ['error', {
 				allowSingleExtends: true,
 			}],
-			'import/consistent-type-specifier-style': ['error', 'prefer-top-level'],
 			// window の禁止理由: グローバルスコープと衝突し、予期せぬ結果を招くため
 			// e の禁止理由: error や event など、複数のキーワードの頭文字であり分かりにくいため
 			'id-denylist': ['error', 'window', 'e'],
@@ -99,16 +97,45 @@ export default [
 		},
 	},
 	{
+		files: ['*.js', '*.ts'],
+		languageOptions: {
+			parserOptions: {
+				parser: tsParser,
+				project: ['./tsconfig.scripts.json'],
+				sourceType: 'module',
+				tsconfigRootDir: import.meta.dirname,
+			},
+		},
+		rules: {
+			'import/no-default-export': 'off',
+		},
+	},
+	{
+		files: ['util/**/*.ts', 'util/**/*.js'],
+		languageOptions: {
+			parserOptions: {
+				parser: tsParser,
+				project: ['./tsconfig.util.json'],
+				sourceType: 'module',
+				tsconfigRootDir: import.meta.dirname,
+			},
+		},
+		rules: {
+			'import/no-default-export': 'off',
+		},
+	},
+	{
 		ignores: [
 			// TODO: Error while loading rule '@typescript-eslint/naming-convention': Cannot use 'in' operator to search for 'type' in undefined のため一時的に無効化
 			// See https://github.com/misskey-dev/misskey/pull/15311
 			'js/i18n.ts',
 			'js-built/',
-			"**/lib/",
-			"**/temp/",
-			"**/built/",
-			"**/coverage/",
-			"**/node_modules/",
-		]
+			'built/',
+			'**/lib/',
+			'**/temp/',
+			'**/built/',
+			'**/coverage/',
+			'**/node_modules/',
+		],
 	},
 ];

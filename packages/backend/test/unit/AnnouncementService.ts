@@ -3,17 +3,21 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import { MockRedis } from '../misc/MockRedis.js';
+
 process.env.NODE_ENV = 'test';
 
 import { jest } from '@jest/globals';
 import { ModuleMocker } from 'jest-mock';
 import { Test } from '@nestjs/testing';
-import { NoOpCacheService } from '../misc/noOpCaches.js';
-import { FakeInternalEventService } from '../misc/FakeInternalEventService.js';
+import { FakeCacheManagementService } from '../misc/FakeCacheManagementService.js';
+import { MockInternalEventService } from '../misc/MockInternalEventService.js';
+import type { MockMetadata } from 'jest-mock';
+import { CacheManagementService } from '@/global/CacheManagementService.js';
 import { GlobalModule } from '@/GlobalModule.js';
 import { AnnouncementService } from '@/core/AnnouncementService.js';
 import { AnnouncementEntityService } from '@/core/entities/AnnouncementEntityService.js';
-import { InternalEventService } from '@/core/InternalEventService.js';
+import { InternalEventService } from '@/global/InternalEventService.js';
 import type {
 	AnnouncementReadsRepository,
 	AnnouncementsRepository,
@@ -23,13 +27,14 @@ import type {
 } from '@/models/_.js';
 import { DI } from '@/di-symbols.js';
 import { genAidx } from '@/misc/id/aidx.js';
-import { CacheService } from '@/core/CacheService.js';
 import { IdService } from '@/core/IdService.js';
 import { GlobalEventService } from '@/core/GlobalEventService.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
+import { RoleService } from '@/core/RoleService.js';
+import { CoreModule } from '@/core/CoreModule.js';
 import { secureRndstr } from '@/misc/secure-rndstr.js';
 import type { TestingModule } from '@nestjs/testing';
-import type { MockFunctionMetadata } from 'jest-mock';
+import type { Redis } from 'ioredis';
 
 const moduleMocker = new ModuleMocker(global);
 
@@ -41,6 +46,7 @@ describe('AnnouncementService', () => {
 	let announcementReadsRepository: AnnouncementReadsRepository;
 	let globalEventService: jest.Mocked<GlobalEventService>;
 	let moderationLogService: jest.Mocked<ModerationLogService>;
+	let cacheManagementService: CacheManagementService;
 
 	function createUser(data: Partial<MiUser> = {}) {
 		const un = secureRndstr(16);
@@ -64,24 +70,16 @@ describe('AnnouncementService', () => {
 			.then(x => announcementsRepository.findOneByOrFail(x.identifiers[0]));
 	}
 
-	beforeEach(async () => {
+	beforeAll(async () => {
 		app = await Test.createTestingModule({
 			imports: [
 				GlobalModule,
-			],
-			providers: [
-				AnnouncementService,
-				AnnouncementEntityService,
-				CacheService,
-				IdService,
-				InternalEventService,
-				GlobalEventService,
-				ModerationLogService,
+				CoreModule,
 			],
 		})
 			.useMocker((token) => {
 				if (typeof token === 'function') {
-					const mockMetadata = moduleMocker.getMetadata(token) as MockFunctionMetadata<any, any>;
+					const mockMetadata = moduleMocker.getMetadata(token) as MockMetadata<any, any>;
 					const Mock = moduleMocker.generateFromMetadata(mockMetadata);
 					return new Mock();
 				}
@@ -93,29 +91,45 @@ describe('AnnouncementService', () => {
 			.overrideProvider(ModerationLogService).useValue({
 				log: jest.fn(),
 			})
-			.overrideProvider(InternalEventService).useClass(FakeInternalEventService)
-			.overrideProvider(CacheService).useClass(NoOpCacheService)
+			.overrideProvider(RoleService).useValue({
+				getUserRoles: jest.fn((_) => []),
+			})
+			.overrideProvider(DI.redis).useClass(MockRedis)
+			.overrideProvider(DI.redisForPub).useFactory({ inject: [DI.redis], factory: (redisClient: Redis) => redisClient })
+			.overrideProvider(DI.redisForSub).useFactory({ inject: [DI.redis], factory: (redisClient: Redis) => redisClient })
+			.overrideProvider(DI.redisForRateLimit).useFactory({ inject: [DI.redis], factory: (redisClient: Redis) => redisClient })
+			.overrideProvider(DI.redisForReactions).useFactory({ inject: [DI.redis], factory: (redisClient: Redis) => redisClient })
+			.overrideProvider(DI.redisForTimelines).useFactory({ inject: [DI.redis], factory: (redisClient: Redis) => redisClient })
+			.overrideProvider(CacheManagementService).useClass(FakeCacheManagementService)
 			.compile();
 
+		await app.init();
 		app.enableShutdownHooks();
+	});
 
+	afterAll(async () => {
+		await app.close();
+	});
+
+	beforeEach(() => {
 		announcementService = app.get<AnnouncementService>(AnnouncementService);
 		usersRepository = app.get<UsersRepository>(DI.usersRepository);
 		announcementsRepository = app.get<AnnouncementsRepository>(DI.announcementsRepository);
 		announcementReadsRepository = app.get<AnnouncementReadsRepository>(DI.announcementReadsRepository);
 		globalEventService = app.get<GlobalEventService>(GlobalEventService) as jest.Mocked<GlobalEventService>;
 		moderationLogService = app.get<ModerationLogService>(ModerationLogService) as jest.Mocked<ModerationLogService>;
+		cacheManagementService = app.get(CacheManagementService);
 	});
 
 	afterEach(async () => {
-		await Promise.all([
-			app.get(DI.metasRepository).delete({}),
-			usersRepository.delete({}),
-			announcementsRepository.delete({}),
-			announcementReadsRepository.delete({}),
-		]);
-
-		await app.close();
+		await app.get(DI.metasRepository).deleteAll();
+		await usersRepository.deleteAll();
+		await announcementsRepository.deleteAll();
+		await announcementReadsRepository.deleteAll();
+		moderationLogService.log.mockReset();
+		globalEventService.publishMainStream.mockReset();
+		globalEventService.publishBroadcastStream.mockReset();
+		await cacheManagementService.clear();
 	});
 
 	describe('getUnreadAnnouncements', () => {

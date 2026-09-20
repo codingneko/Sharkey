@@ -3,15 +3,15 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { Inject, Injectable } from '@nestjs/common';
-import type { MiUserListMembership, UserListMembershipsRepository, UserListsRepository } from '@/models/_.js';
+import { Injectable } from '@nestjs/common';
 import type { Packed } from '@/misc/json-schema.js';
+import { CacheService } from '@/core/CacheService.js';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
-import { DI } from '@/di-symbols.js';
+import { UserListService } from '@/core/UserListService.js';
 import { bindThis } from '@/decorators.js';
-import { isRenotePacked, isQuotePacked } from '@/misc/is-renote.js';
+import { isPackedPureRenote } from '@/misc/is-renote.js';
 import type { JsonObject } from '@/misc/json-value.js';
-import { type Channel, NoteChannel, type MiChannelService } from '../channel.js';
+import { NoteChannel, type Channel, type MiChannelService } from '../channel.js';
 
 class UserListChannel extends NoteChannel {
 	public readonly chName = 'userList';
@@ -19,8 +19,6 @@ class UserListChannel extends NoteChannel {
 	public static requireCredential = true as const;
 	public static kind = 'read:account';
 	private listId: string;
-	private membershipsMap: Record<string, Pick<MiUserListMembership, 'withReplies'> | undefined> = {};
-	private listUsersClock: NodeJS.Timeout;
 	private withFiles: boolean;
 	private withRenotes: boolean;
 
@@ -29,8 +27,8 @@ class UserListChannel extends NoteChannel {
 		connection: Channel['connection'],
 		noteEntityService: NoteEntityService,
 
-		private userListsRepository: UserListsRepository,
-		private userListMembershipsRepository: UserListMembershipsRepository,
+		private readonly cacheService: CacheService,
+		private readonly userListService: UserListService,
 	) {
 		super(id, connection, noteEntityService);
 		//this.updateListUsers = this.updateListUsers.bind(this);
@@ -46,47 +44,23 @@ class UserListChannel extends NoteChannel {
 		this.withRenotes = !!(params.withRenotes ?? true);
 
 		// Check existence and owner
-		const listExist = await this.userListsRepository.exists({
-			where: {
-				id: this.listId,
-				userId: this.user.id,
-			},
-		});
+		const listExist = await this.userListService.userListsCache.fetchMaybe(this.listId);
 		if (!listExist) return false;
+		if (!listExist.isPublic && listExist.userId !== this.user.id) return false;
 
 		this.subscriber.on(`userListStream:${this.listId}`, this.send);
 		this.subscriber.on('notesStream', this.onNote);
-
-		this.updateListUsers();
-		this.listUsersClock = setInterval(this.updateListUsers, 5000);
-
 		return true;
-	}
-
-	@bindThis
-	private async updateListUsers() {
-		const memberships = await this.userListMembershipsRepository.find({
-			where: {
-				userListId: this.listId,
-			},
-			select: ['userId'],
-		});
-
-		const membershipsMap: Record<string, Pick<MiUserListMembership, 'withReplies'> | undefined> = {};
-		for (const membership of memberships) {
-			membershipsMap[membership.userId] = {
-				withReplies: membership.withReplies,
-			};
-		}
-		this.membershipsMap = membershipsMap;
 	}
 
 	@bindThis
 	private async onNote(note: Packed<'Note'>) {
 		if (note.channelId) return;
-		if (!Object.hasOwn(this.membershipsMap, note.userId)) return;
 		if (this.withFiles && (note.fileIds == null || note.fileIds.length === 0)) return;
-		if (!this.withRenotes && isRenotePacked(note) && !isQuotePacked(note)) return;
+		if (!this.withRenotes && isPackedPureRenote(note)) return;
+
+		const memberships = await this.cacheService.listUserMembershipsCache.fetch(this.listId);
+		if (!memberships.has(note.userId)) return;
 
 		const preparedNote = await this.prepareNote(note);
 		if (preparedNote) {
@@ -99,8 +73,6 @@ class UserListChannel extends NoteChannel {
 		// Unsubscribe events
 		this.subscriber.off(`userListStream:${this.listId}`, this.send);
 		this.subscriber.off('notesStream', this.onNote);
-
-		clearInterval(this.listUsersClock);
 	}
 }
 
@@ -111,13 +83,9 @@ export class UserListChannelService implements MiChannelService<true> {
 	public readonly kind = UserListChannel.kind;
 
 	constructor(
-		@Inject(DI.userListsRepository)
-		private userListsRepository: UserListsRepository,
-
-		@Inject(DI.userListMembershipsRepository)
-		private userListMembershipsRepository: UserListMembershipsRepository,
-
-		private noteEntityService: NoteEntityService,
+		private readonly noteEntityService: NoteEntityService,
+		private readonly cacheService: CacheService,
+		private readonly userListService: UserListService,
 	) {
 	}
 
@@ -127,8 +95,8 @@ export class UserListChannelService implements MiChannelService<true> {
 			id,
 			connection,
 			this.noteEntityService,
-			this.userListsRepository,
-			this.userListMembershipsRepository,
+			this.cacheService,
+			this.userListService,
 		);
 	}
 }

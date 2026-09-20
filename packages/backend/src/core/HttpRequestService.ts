@@ -19,6 +19,8 @@ import { validateContentTypeSetAsActivityPub } from '@/core/activitypub/misc/val
 import type { IObject, IObjectWithId } from '@/core/activitypub/type.js';
 import { UtilityService } from '@/core/UtilityService.js';
 import { ApUtilityService } from '@/core/activitypub/ApUtilityService.js';
+import { TimeService } from '@/global/TimeService.js';
+import { EnvService } from '@/global/EnvService.js';
 import type { Response } from 'node-fetch';
 import type { Socket } from 'node:net';
 
@@ -72,23 +74,24 @@ export function validateSocketConnect(allowedPrivateNetworks: PrivateNetwork[] |
 
 declare module 'node:http' {
 	interface Agent {
-		createConnection(options: net.NetConnectOpts, callback?: (err: unknown, stream: net.Socket) => void): net.Socket;
+		createConnection(options: net.NetConnectOpts, callback?: (err: Error | null, stream: net.Socket) => void): net.Socket;
 	}
 }
 
 class HttpRequestServiceAgent extends http.Agent {
 	constructor(
 		private config: Config,
+		private readonly envService: EnvService,
 		options?: http.AgentOptions,
 	) {
 		super(options);
 	}
 
 	@bindThis
-	public createConnection(options: net.NetConnectOpts, callback?: (err: unknown, stream: net.Socket) => void): net.Socket {
+	public createConnection(options: net.NetConnectOpts, callback?: (err: Error | null, stream: net.Socket) => void): net.Socket {
 		const socket = super.createConnection(options, callback)
 			.on('connect', () => {
-				if (process.env.NODE_ENV === 'production') {
+				if (this.envService.env.NODE_ENV === 'production') {
 					validateSocketConnect(this.config.allowedPrivateNetworks, socket);
 				}
 			});
@@ -99,16 +102,17 @@ class HttpRequestServiceAgent extends http.Agent {
 class HttpsRequestServiceAgent extends https.Agent {
 	constructor(
 		private config: Config,
+		private readonly envService: EnvService,
 		options?: https.AgentOptions,
 	) {
 		super(options);
 	}
 
 	@bindThis
-	public createConnection(options: net.NetConnectOpts, callback?: (err: unknown, stream: net.Socket) => void): net.Socket {
+	public createConnection(options: net.NetConnectOpts, callback?: (err: Error | null, stream: net.Socket) => void): net.Socket {
 		const socket = super.createConnection(options, callback)
 			.on('connect', () => {
-				if (process.env.NODE_ENV === 'production') {
+				if (this.envService.env.NODE_ENV === 'production') {
 					validateSocketConnect(this.config.allowedPrivateNetworks, socket);
 				}
 			});
@@ -156,8 +160,12 @@ export class HttpRequestService {
 	constructor(
 		@Inject(DI.config)
 		private config: Config,
+
 		private readonly apUtilityService: ApUtilityService,
 		private readonly utilityService: UtilityService,
+		private readonly timeService: TimeService,
+
+		envService: EnvService,
 	) {
 		const cache = new CacheableLookup({
 			maxTtl: 3600,	// 1hours
@@ -178,9 +186,9 @@ export class HttpRequestService {
 
 		this.httpsNative = new https.Agent(agentOption);
 
-		this.http = new HttpRequestServiceAgent(config, agentOption);
+		this.http = new HttpRequestServiceAgent(config, envService, agentOption);
 
-		this.https = new HttpsRequestServiceAgent(config, agentOption);
+		this.https = new HttpsRequestServiceAgent(config, envService, agentOption);
 
 		const maxSockets = Math.max(256, config.deliverJobConcurrency ?? 128);
 
@@ -291,13 +299,13 @@ export class HttpRequestService {
 	}
 
 	@bindThis
-	public async getJson<T = unknown>(url: string, accept = 'application/json, */*', headers?: Record<string, string>, isLocalAddressAllowed = false): Promise<T> {
+	public async getJson<T = unknown>(url: string, accept = 'application/json, */*', headers?: Record<string, string>, isLocalAddressAllowed = false, timeout = 5000): Promise<T> {
 		const res = await this.send(url, {
 			method: 'GET',
 			headers: Object.assign({
 				Accept: accept,
 			}, headers ?? {}),
-			timeout: 5000,
+			timeout,
 			size: 1024 * 256,
 			isLocalAddressAllowed: isLocalAddressAllowed,
 		});
@@ -306,13 +314,13 @@ export class HttpRequestService {
 	}
 
 	@bindThis
-	public async getHtml(url: string, accept = 'text/html, */*', headers?: Record<string, string>, isLocalAddressAllowed = false): Promise<string> {
+	public async getHtml(url: string, accept = 'text/html, */*', headers?: Record<string, string>, isLocalAddressAllowed = false, timeout = 5000): Promise<string> {
 		const res = await this.send(url, {
 			method: 'GET',
 			headers: Object.assign({
 				Accept: accept,
 			}, headers ?? {}),
-			timeout: 5000,
+			timeout,
 			isLocalAddressAllowed: isLocalAddressAllowed,
 		});
 
@@ -340,10 +348,10 @@ export class HttpRequestService {
 
 		const parsedUrl = new URL(url);
 		const allowHttp = args.allowHttp || await isPrivateUrl(parsedUrl, this.lookup);
-		this.utilityService.assertUrl(parsedUrl, allowHttp);
+		this.utilityService.assertUrl(parsedUrl, { allowHttp });
 
 		const controller = new AbortController();
-		setTimeout(() => {
+		this.timeService.startTimer(() => {
 			controller.abort();
 		}, timeout);
 

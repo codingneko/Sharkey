@@ -3,8 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { ACHIEVEMENT_TYPES } from '@/core/AchievementService.js';
-import { notificationTypes, userExportableEntities } from '@/types.js';
+import { notificationTypes, userExportableEntities, userImportableEntities } from '@/types.js';
 
 const baseSchema = {
 	type: 'object',
@@ -312,9 +311,7 @@ export const packedNotificationSchema = {
 				enum: ['achievementEarned'],
 			},
 			achievement: {
-				type: 'string',
-				optional: false, nullable: false,
-				enum: ACHIEVEMENT_TYPES,
+				ref: 'AchievementName',
 			},
 		},
 	}, {
@@ -330,6 +327,26 @@ export const packedNotificationSchema = {
 				type: 'string',
 				optional: false, nullable: false,
 				enum: userExportableEntities,
+			},
+			fileId: {
+				type: 'string',
+				optional: false, nullable: false,
+				format: 'id',
+			},
+		},
+	}, {
+		type: 'object',
+		properties: {
+			...baseSchema.properties,
+			type: {
+				type: 'string',
+				optional: false, nullable: false,
+				enum: ['importCompleted'],
+			},
+			importedEntity: {
+				type: 'string',
+				optional: false, nullable: false,
+				enum: userImportableEntities,
 			},
 			fileId: {
 				type: 'string',
@@ -441,6 +458,75 @@ export const packedNotificationSchema = {
 				type: 'object',
 				ref: 'Note',
 				optional: false, nullable: false,
+			},
+		},
+	}, {
+		type: 'object',
+		properties: {
+			...baseSchema.properties,
+			type: {
+				type: 'string',
+				optional: false, nullable: false,
+				enum: ['sharedAccessGranted'],
+			},
+			user: {
+				type: 'object',
+				ref: 'UserLite',
+				optional: false, nullable: false,
+			},
+			userId: {
+				type: 'string',
+				optional: false, nullable: false,
+				format: 'id',
+			},
+			permCount: {
+				type: 'number',
+				optional: true, nullable: false,
+			},
+			rank: {
+				type: 'string',
+				enum: ['admin', 'mod', 'user'],
+				optional: true, nullable: true,
+			},
+		},
+	}, {
+		type: 'object',
+		properties: {
+			...baseSchema.properties,
+			type: {
+				type: 'string',
+				optional: false, nullable: false,
+				enum: ['sharedAccessRevoked'],
+			},
+			user: {
+				type: 'object',
+				ref: 'UserLite',
+				optional: false, nullable: false,
+			},
+			userId: {
+				type: 'string',
+				optional: false, nullable: false,
+				format: 'id',
+			},
+		},
+	}, {
+		type: 'object',
+		properties: {
+			...baseSchema.properties,
+			type: {
+				type: 'string',
+				optional: false, nullable: false,
+				enum: ['sharedAccessLogin'],
+			},
+			user: {
+				type: 'object',
+				ref: 'UserLite',
+				optional: false, nullable: false,
+			},
+			userId: {
+				type: 'string',
+				optional: false, nullable: false,
+				format: 'id',
 			},
 		},
 	}, {

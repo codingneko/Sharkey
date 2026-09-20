@@ -15,10 +15,17 @@ import { DI } from '@/di-symbols.js';
 import { deepClone } from '@/misc/clone.js';
 import { bindThis } from '@/decorators.js';
 import { SystemAccountService } from '@/core/SystemAccountService.js';
+import { CacheManagementService, ManagedMemorySingleCache } from '@/global/CacheManagementService.js';
+import type { IActivity } from '@/core/activitypub/type.js';
+import { LoggerService } from '@/core/LoggerService.js';
+import type Logger from '@/logger.js';
+import { renderInlineError } from '@/misc/render-inline-error.js';
+import type { Signed } from '@/core/activitypub/JsonLdService.js';
 
 @Injectable()
 export class RelayService {
-	private relaysCache: MemorySingleCache<MiRelay[]>;
+	private readonly logger: Logger;
+	private readonly relaysCache: ManagedMemorySingleCache<MiRelay[]>;
 
 	constructor(
 		@Inject(DI.relaysRepository)
@@ -28,8 +35,12 @@ export class RelayService {
 		private queueService: QueueService,
 		private systemAccountService: SystemAccountService,
 		private apRendererService: ApRendererService,
+		private readonly loggerService: LoggerService,
+
+		cacheManagementService: CacheManagementService,
 	) {
-		this.relaysCache = new MemorySingleCache<MiRelay[]>(1000 * 60 * 10); // 10m
+		this.logger = this.loggerService.getLogger('relay');
+		this.relaysCache = cacheManagementService.createMemorySingleCache<MiRelay[]>('relay', 1000 * 60 * 10); // 10m
 	}
 
 	@bindThis
@@ -43,7 +54,7 @@ export class RelayService {
 		const relayActor = await this.systemAccountService.fetch('relay');
 		const follow = this.apRendererService.renderFollowRelay(relay, relayActor);
 		const activity = this.apRendererService.addContext(follow);
-		this.queueService.deliver(relayActor, activity, relay.inbox, false);
+		await this.queueService.deliver(relayActor, activity, relay.inbox, false);
 
 		return relay;
 	}
@@ -62,7 +73,7 @@ export class RelayService {
 		const follow = this.apRendererService.renderFollowRelay(relay, relayActor);
 		const undo = this.apRendererService.renderUndo(follow, relayActor);
 		const activity = this.apRendererService.addContext(undo);
-		this.queueService.deliver(relayActor, activity, relay.inbox, false);
+		await this.queueService.deliver(relayActor, activity, relay.inbox, false);
 
 		await this.relaysRepository.delete(relay.id);
 	}
@@ -103,10 +114,19 @@ export class RelayService {
 		const copy = deepClone(activity);
 		if (!copy.to) copy.to = ['https://www.w3.org/ns/activitystreams#Public'];
 
-		const signed = await this.apRendererService.attachLdSignature(copy, user);
+		const signed = await this.signActivity(copy, user);
 
 		for (const relay of relays) {
-			this.queueService.deliver(user, signed, relay.inbox, false);
+			await this.queueService.deliver(user, signed, relay.inbox, false);
+		}
+	}
+
+	private async signActivity<T extends IActivity>(activity: T, user: { id: MiUser['id']; host: null; }): Promise<T | Signed<T>> {
+		try {
+			return await this.apRendererService.attachLdSignature(activity, user);
+		} catch (err) {
+			this.logger.warn(`Error signing activity ${activity.id}: ${renderInlineError(err)}`);
+			return activity;
 		}
 	}
 }

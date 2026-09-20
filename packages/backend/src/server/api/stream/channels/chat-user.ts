@@ -7,10 +7,9 @@ import { Inject, Injectable } from '@nestjs/common';
 import { DI } from '@/di-symbols.js';
 import { bindThis } from '@/decorators.js';
 import type { ChatMessagesRepository } from '@/models/_.js';
-import type { GlobalEvents } from '@/core/GlobalEventService.js';
+import type { ChatEventPayload } from '@/core/GlobalEventService.js';
 import type { JsonObject } from '@/misc/json-value.js';
 import { ChatService } from '@/core/ChatService.js';
-import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { Channel, type MiChannelService } from '../channel.js';
 
 class ChatUserChannel extends Channel {
@@ -52,7 +51,7 @@ class ChatUserChannel extends Channel {
 	}
 
 	@bindThis
-	private async onEvent(data: GlobalEvents['chatUser']['payload']) {
+	private async onEvent(data: ChatEventPayload) {
 		this.send(data.type, data.body);
 	}
 

@@ -14,13 +14,14 @@ import accepts from 'accepts';
 import vary from 'vary';
 import secureJson from 'secure-json-parse';
 import { DI } from '@/di-symbols.js';
-import type { FollowingsRepository, NotesRepository, EmojisRepository, NoteReactionsRepository, UserProfilesRepository, UserNotePiningsRepository, UsersRepository, FollowRequestsRepository, MiMeta } from '@/models/_.js';
+import type { FollowingsRepository, NotesRepository, EmojisRepository, NoteReactionsRepository, UserProfilesRepository, UserNotePiningsRepository, UsersRepository, FollowRequestsRepository, MiMeta, MiUserNotePining } from '@/models/_.js';
 import * as url from '@/misc/prelude/url.js';
 import type { Config } from '@/config.js';
 import { ApRendererService } from '@/core/activitypub/ApRendererService.js';
 import { ApDbResolverService } from '@/core/activitypub/ApDbResolverService.js';
 import { QueueService } from '@/core/QueueService.js';
 import type { MiLocalUser, MiRemoteUser, MiUser } from '@/models/User.js';
+import { isLocalUser } from '@/models/User.js';
 import { UserKeypairService } from '@/core/UserKeypairService.js';
 import type { MiUserPublickey } from '@/models/UserPublickey.js';
 import type { MiFollowing } from '@/models/Following.js';
@@ -28,17 +29,19 @@ import { countIf } from '@/misc/prelude/array.js';
 import type { MiNote } from '@/models/Note.js';
 import { QueryService } from '@/core/QueryService.js';
 import { UtilityService } from '@/core/UtilityService.js';
-import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import type Logger from '@/logger.js';
 import { LoggerService } from '@/core/LoggerService.js';
 import { bindThis } from '@/decorators.js';
 import { IActivity, IAnnounce, ICreate } from '@/core/activitypub/type.js';
 import { isPureRenote, isQuote, isRenote } from '@/misc/is-renote.js';
+import { promiseMap } from '@/misc/promise-map.js';
 import * as Acct from '@/misc/acct.js';
 import { CacheService } from '@/core/CacheService.js';
+import { CustomEmojiService, encodeEmojiKey } from '@/core/CustomEmojiService.js';
 import { FanoutTimelineEndpointService } from '@/core/FanoutTimelineEndpointService.js';
-import type { FastifyInstance, FastifyRequest, FastifyReply, FastifyPluginOptions, FastifyBodyParser } from 'fastify';
+import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import type { FindOptionsWhere } from 'typeorm';
+import type { FastifyInstance, FastifyRequest, FastifyReply, FastifyPluginOptions, FastifyBodyParser } from 'fastify';
 
 const ACTIVITY_JSON = 'application/activity+json; charset=utf-8';
 const LD_JSON = 'application/ld+json; profile="https://www.w3.org/ns/activitystreams"; charset=utf-8';
@@ -80,7 +83,6 @@ export class ActivityPubServerService {
 		private followRequestsRepository: FollowRequestsRepository,
 
 		private utilityService: UtilityService,
-		private userEntityService: UserEntityService,
 		private apRendererService: ApRendererService,
 		private apDbResolverService: ApDbResolverService,
 		private queueService: QueueService,
@@ -89,6 +91,8 @@ export class ActivityPubServerService {
 		private fanoutTimelineEndpointService: FanoutTimelineEndpointService,
 		private loggerService: LoggerService,
 		private readonly cacheService: CacheService,
+		private readonly customEmojiService: CustomEmojiService,
+		private readonly userEntityService: UserEntityService,
 	) {
 		//this.createServer = this.createServer.bind(this);
 		this.logger = this.loggerService.getLogger('apserv', 'pink');
@@ -372,19 +376,17 @@ export class ActivityPubServerService {
 
 		const page = request.query.page === 'true';
 
-		const user = await this.usersRepository.findOneBy({
-			id: userId,
-			host: IsNull(),
-		});
+		const [user, profile] = await Promise.all([
+			this.cacheService.findOptionalUserById(userId),
+			this.cacheService.userProfileCache.fetchMaybe(userId),
+		]);
 
-		if (user == null) {
+		if (user == null || profile == null || !isLocalUser(user) || !this.utilityService.isActiveUser(user)) {
 			reply.code(404);
 			return;
 		}
 
 		//#region Check ff visibility
-		const profile = await this.userProfilesRepository.findOneByOrFail({ userId: user.id });
-
 		if (profile.followersVisibility === 'private') {
 			reply.code(403);
 			return;
@@ -412,13 +414,19 @@ export class ActivityPubServerService {
 				where: query,
 				take: limit + 1,
 				order: { id: -1 },
+				select: { id: true, followerId: true },
 			});
 
 			// 「次のページ」があるかどうか
 			const inStock = followings.length === limit + 1;
 			if (inStock) followings.pop();
 
-			const renderedFollowers = await Promise.all(followings.map(following => this.apRendererService.renderFollowUser(following.followerId)));
+			const followerIds = followings.map(f => f.followerId);
+			const followers = await this.cacheService.findUsersById(followerIds);
+			const renderedFollowers = followers
+				.values()
+				.map(follower => this.userEntityService.getUserUri(follower))
+				.toArray();
 			const rendered = this.apRendererService.renderOrderedCollectionPage(
 				`${partOf}?${url.query({
 					page: 'true',
@@ -469,19 +477,17 @@ export class ActivityPubServerService {
 
 		const page = request.query.page === 'true';
 
-		const user = await this.usersRepository.findOneBy({
-			id: userId,
-			host: IsNull(),
-		});
+		const [user, profile] = await Promise.all([
+			this.cacheService.findOptionalUserById(userId),
+			this.cacheService.userProfileCache.fetchMaybe(userId),
+		]);
 
-		if (user == null) {
+		if (user == null || profile == null || !isLocalUser(user) || !this.utilityService.isActiveUser(user)) {
 			reply.code(404);
 			return;
 		}
 
 		//#region Check ff visibility
-		const profile = await this.userProfilesRepository.findOneByOrFail({ userId: user.id });
-
 		if (profile.followingVisibility === 'private') {
 			reply.code(403);
 			return;
@@ -509,13 +515,19 @@ export class ActivityPubServerService {
 				where: query,
 				take: limit + 1,
 				order: { id: -1 },
+				select: { id: true, followeeId: true },
 			});
 
 			// 「次のページ」があるかどうか
 			const inStock = followings.length === limit + 1;
 			if (inStock) followings.pop();
 
-			const renderedFollowees = await Promise.all(followings.map(following => this.apRendererService.renderFollowUser(following.followeeId)));
+			const followeeIds = followings.map(f => f.followeeId);
+			const followees = await this.cacheService.findUsersById(followeeIds);
+			const renderedFollowees = followees
+				.values()
+				.map(follower => this.userEntityService.getUserUri(follower))
+				.toArray();
 			const rendered = this.apRendererService.renderOrderedCollectionPage(
 				`${partOf}?${url.query({
 					page: 'true',
@@ -555,26 +567,27 @@ export class ActivityPubServerService {
 
 		const userId = request.params.user;
 
-		const user = await this.usersRepository.findOneBy({
-			id: userId,
-			host: IsNull(),
-		});
+		const [user, pinings] = await Promise.all([
+			this.cacheService.findOptionalUserById(userId),
 
-		if (user == null) {
+			// TODO cache this?
+			this.userNotePiningsRepository.find({
+				where: { userId },
+				order: { id: 'DESC' },
+				relations: { note: true },
+			}) as Promise<(MiUserNotePining & { note: MiNote })[]>,
+		]);
+
+		if (user == null || !isLocalUser(user) || !this.utilityService.isActiveUser(user)) {
 			reply.code(404);
 			return;
 		}
 
-		const pinings = await this.userNotePiningsRepository.find({
-			where: { userId: user.id },
-			order: { id: 'DESC' },
-		});
-
-		const pinnedNotes = (await Promise.all(pinings.map(pining =>
-			this.notesRepository.findOneByOrFail({ id: pining.noteId }))))
+		const pinnedNotes = pinings
+			.map(pin => pin.note)
 			.filter(note => !note.localOnly && ['public', 'home'].includes(note.visibility) && !isPureRenote(note));
 
-		const renderedNotes = await Promise.all(pinnedNotes.map(note => this.apRendererService.renderNote(note, user)));
+		const renderedNotes = await promiseMap(pinnedNotes, async note => await this.apRendererService.renderNote(note, user), { limiter: 4 });
 
 		const rendered = this.apRendererService.renderOrderedCollection(
 			`${this.config.url}/users/${userId}/collections/featured`,
@@ -625,12 +638,9 @@ export class ActivityPubServerService {
 			return;
 		}
 
-		const user = await this.usersRepository.findOneBy({
-			id: userId,
-			host: IsNull(),
-		});
+		const user = await this.cacheService.findOptionalUserById(userId);
 
-		if (user == null) {
+		if (user == null || !isLocalUser(user) || !this.utilityService.isActiveUser(user)) {
 			reply.code(404);
 			return;
 		}
@@ -664,7 +674,7 @@ export class ActivityPubServerService {
 
 			if (sinceId) notes.reverse();
 
-			const activities = await Promise.all(notes.map(note => this.packActivity(note, user)));
+			const activities = await promiseMap(notes, async note => await this.packActivity(note, user));
 			const rendered = this.apRendererService.renderOrderedCollectionPage(
 				`${partOf}?${url.query({
 					page: 'true',
@@ -712,13 +722,8 @@ export class ActivityPubServerService {
 	}
 
 	@bindThis
-	private async userInfo(request: FastifyRequest, reply: FastifyReply, user: MiUser | null, redact = false) {
-		if (this.meta.federation === 'none') {
-			reply.code(403);
-			return;
-		}
-
-		if (user == null) {
+	private async userInfo(request: FastifyRequest, reply: FastifyReply, user: MiUser | null | undefined, redact = false) {
+		if (user == null || !this.utilityService.isActiveUser(user)) {
 			reply.code(404);
 			return;
 		}
@@ -833,6 +838,13 @@ export class ActivityPubServerService {
 				return;
 			}
 
+			const user = await this.cacheService.findOptionalUserById(note.userId);
+
+			if (user == null || !this.utilityService.isActiveUser(user)) {
+				reply.code(404);
+				return;
+			}
+
 			// リモートだったらリダイレクト
 			if (note.userHost != null) {
 				if (note.uri == null || this.utilityService.isSelfHost(note.userHost)) {
@@ -850,8 +862,7 @@ export class ActivityPubServerService {
 
 			this.setResponseType(request, reply);
 
-			const author = await this.usersRepository.findOneByOrFail({ id: note.userId });
-			return this.apRendererService.addContext(await this.apRendererService.renderNote(note, author, false));
+			return this.apRendererService.addContext(await this.apRendererService.renderNote(note, user, false));
 		});
 
 		// note activity
@@ -878,10 +889,16 @@ export class ActivityPubServerService {
 				return;
 			}
 
+			const user = await this.cacheService.findOptionalUserById(note.userId);
+
+			if (user == null || !this.utilityService.isActiveUser(user)) {
+				reply.code(404);
+				return;
+			}
+
 			this.setResponseType(request, reply);
 
-			const author = await this.usersRepository.findOneByOrFail({ id: note.userId });
-			return (this.apRendererService.addContext(await this.packActivity(note, author)));
+			return (this.apRendererService.addContext(await this.packActivity(note, user)));
 		});
 
 		// replies
@@ -962,25 +979,19 @@ export class ActivityPubServerService {
 			if (reject) return;
 
 			const userId = request.params.user;
+			const [user, keypair] = await Promise.all([
+				this.cacheService.findOptionalUserById(userId),
+				this.userKeypairService.getUserKeypairMaybe(userId),
+			]);
 
-			const user = await this.usersRepository.findOneBy({
-				id: userId,
-				host: IsNull(),
-			});
-
-			if (user == null) {
+			if (user == null || keypair == null || !isLocalUser(user) || !this.utilityService.isActiveUser(user)) {
 				reply.code(404);
 				return;
 			}
 
-			const keypair = await this.userKeypairService.getUserKeypair(user.id);
-
-			if (this.userEntityService.isLocalUser(user)) {
+			{
 				this.setResponseType(request, reply);
 				return (this.apRendererService.addContext(this.apRendererService.renderKey(user, keypair)));
-			} else {
-				reply.code(400);
-				return;
 			}
 		});
 
@@ -996,11 +1007,7 @@ export class ActivityPubServerService {
 			}
 
 			const userId = request.params.user;
-
-			const user = await this.usersRepository.findOneBy({
-				id: userId,
-				isSuspended: false,
-			});
+			const user = await this.cacheService.findOptionalUserById(userId);
 
 			return await this.userInfo(request, reply, user, redact);
 		});
@@ -1013,13 +1020,7 @@ export class ActivityPubServerService {
 				return;
 			}
 
-			const acct = Acct.parse(request.params.acct);
-
-			const user = await this.usersRepository.findOneBy({
-				usernameLower: acct.username.toLowerCase(),
-				host: acct.host ?? IsNull(),
-				isSuspended: false,
-			});
+			const user = await this.cacheService.findOptionalUserByAcct(request.params.acct);
 
 			const { reject, redact } = await this.checkAuthorizedFetch(request, reply, user?.id, true);
 			if (reject) return;
@@ -1038,10 +1039,8 @@ export class ActivityPubServerService {
 			const { reject } = await this.checkAuthorizedFetch(request, reply);
 			if (reject) return;
 
-			const emoji = await this.emojisRepository.findOneBy({
-				host: IsNull(),
-				name: request.params.emoji,
-			});
+			const emojiKey = encodeEmojiKey({ name: request.params.emoji, host: null });
+			const emoji = await this.customEmojiService.emojisByKeyCache.fetchMaybe(emojiKey);
 
 			if (emoji == null || emoji.localOnly) {
 				reply.code(404);
@@ -1049,7 +1048,7 @@ export class ActivityPubServerService {
 			}
 
 			this.setResponseType(request, reply);
-			return (this.apRendererService.addContext(await this.apRendererService.renderEmoji(emoji)));
+			return (this.apRendererService.addContext(this.apRendererService.renderEmoji(emoji)));
 		});
 
 		// like
@@ -1094,14 +1093,8 @@ export class ActivityPubServerService {
 			// check if the following exists.
 
 			const [follower, followee] = await Promise.all([
-				this.usersRepository.findOneBy({
-					id: request.params.follower,
-					host: IsNull(),
-				}),
-				this.usersRepository.findOneBy({
-					id: request.params.followee,
-					host: Not(IsNull()),
-				}),
+				this.cacheService.findLocalUserById(request.params.follower),
+				this.cacheService.findRemoteUserById(request.params.followee),
 			]) as [MiLocalUser | MiRemoteUser | null, MiLocalUser | MiRemoteUser | null];
 
 			if (follower == null || followee == null) {
@@ -1136,14 +1129,8 @@ export class ActivityPubServerService {
 			}
 
 			const [follower, followee] = await Promise.all([
-				this.usersRepository.findOneBy({
-					id: followRequest.followerId,
-					host: IsNull(),
-				}),
-				this.usersRepository.findOneBy({
-					id: followRequest.followeeId,
-					host: Not(IsNull()),
-				}),
+				this.cacheService.findLocalUserById(followRequest.followerId),
+				this.cacheService.findRemoteUserById(followRequest.followeeId),
 			]) as [MiLocalUser | MiRemoteUser | null, MiLocalUser | MiRemoteUser | null];
 
 			if (follower == null || followee == null) {

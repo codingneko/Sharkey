@@ -4,21 +4,32 @@
  */
 
 import * as assert from 'assert';
-import { Test } from '@nestjs/testing';
-
-import { CoreModule } from '@/core/CoreModule.js';
+import { MockEnvService } from '../misc/MockEnvService.js';
+import type { Config } from '@/config.js';
+import type { MiMeta } from '@/models/Meta.js';
 import { ApMfmService } from '@/core/activitypub/ApMfmService.js';
-import { GlobalModule } from '@/GlobalModule.js';
-import { MiNote } from '@/models/Note.js';
+import { MfmService } from '@/core/MfmService.js';
+import { UtilityService } from '@/core/UtilityService.js';
 
 describe('ApMfmService', () => {
+	let config: Config;
+	let meta: MiMeta;
+	let envService: MockEnvService;
+	let utilityService: UtilityService;
+	let mfmService: MfmService;
 	let apMfmService: ApMfmService;
 
-	beforeAll(async () => {
-		const app = await Test.createTestingModule({
-			imports: [GlobalModule, CoreModule],
-		}).compile();
-		apMfmService = app.get<ApMfmService>(ApMfmService);
+	beforeEach(() => {
+		config = {
+			url: 'https://example.com',
+			host: 'example.com',
+			id: 'aidx',
+		} as unknown as Config;
+		meta = {} as unknown as MiMeta;
+		envService = new MockEnvService();
+		utilityService = new UtilityService(config, meta, envService);
+		mfmService = new MfmService(config, utilityService);
+		apMfmService = new ApMfmService(mfmService);
 	});
 
 	describe('getNoteHtml', () => {
@@ -31,7 +42,7 @@ describe('ApMfmService', () => {
 			const { content, noMisskeyContent } = apMfmService.getNoteHtml(note);
 
 			assert.equal(noMisskeyContent, true, 'noMisskeyContent');
-			assert.equal(content, '<p>テキスト <a href="http://misskey.local/tags/タグ" rel="tag">#タグ</a> <a href="http://misskey.local/@mention" class="u-url mention">@mention</a> 🍊 ​:emoji:​ <a href="https://example.com">https://example.com</a></p>', 'content');
+			assert.equal(content, '<p>テキスト <a href="https://example.com/tags/タグ" rel="tag">#タグ</a> <a href="https://example.com/@mention" class="u-url mention">@mention</a> 🍊 ​:emoji:​ <a href="https://example.com">https://example.com</a></p>', 'content');
 		});
 
 		test('Provide _misskey_content for MFM', () => {

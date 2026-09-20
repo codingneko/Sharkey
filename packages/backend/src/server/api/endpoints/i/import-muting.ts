@@ -4,10 +4,10 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import ms from 'ms';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { QueueService } from '@/core/QueueService.js';
 import { AccountMoveService } from '@/core/AccountMoveService.js';
+import { TimeService } from '@/global/TimeService.js';
 import type { DriveFilesRepository } from '@/models/_.js';
 import { DI } from '@/di-symbols.js';
 import { ApiError } from '../../error.js';
@@ -18,9 +18,11 @@ export const meta = {
 	requiredRolePolicy: 'canImportMuting',
 	prohibitMoved: true,
 
+	// 1 per minute
 	limit: {
-		duration: ms('1hour'),
-		max: 1,
+		type: 'bucket',
+		size: 1,
+		dripRate: 1000 * 60,
 	},
 
 	errors: {
@@ -66,6 +68,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 		private queueService: QueueService,
 		private accountMoveService: AccountMoveService,
+		private readonly timeService: TimeService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			const file = await this.driveFilesRepository.findOneBy({ id: ps.fileId });
@@ -76,7 +79,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 			const checkMoving = await this.accountMoveService.validateAlsoKnownAs(
 				me,
-				(old, src) => !!src.movedAt && src.movedAt.getTime() + 1000 * 60 * 60 * 2 > Date.now(),
+				(old, src) => !!src.movedAt && src.movedAt.getTime() + 1000 * 60 * 60 * 2 > this.timeService.now,
 				true,
 			);
 			if (checkMoving ? file.size > 32 * 1024 * 1024 : file.size > 64 * 1024) throw new ApiError(meta.errors.tooBigFile);

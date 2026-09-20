@@ -5,24 +5,26 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 import { Entity, MastodonEntity, MisskeyEntity } from 'megalodon';
-import mfm from 'mfm-js';
-import { MastodonNotificationType } from 'megalodon/lib/src/mastodon/notification.js';
-import { NotificationType } from 'megalodon/lib/src/notification.js';
+import * as mfm from 'mfm-js';
 import { DI } from '@/di-symbols.js';
 import { MfmService } from '@/core/MfmService.js';
 import type { Config } from '@/config.js';
 import { IMentionedRemoteUsers, MiNote } from '@/models/Note.js';
 import type { MiLocalUser, MiUser } from '@/models/User.js';
-import type { NoteEditRepository, UserProfilesRepository } from '@/models/_.js';
+import type { NoteEditsRepository } from '@/models/_.js';
 import { awaitAll } from '@/misc/prelude/await-all.js';
 import { CustomEmojiService } from '@/core/CustomEmojiService.js';
 import { DriveFileEntityService } from '@/core/entities/DriveFileEntityService.js';
 import { IdService } from '@/core/IdService.js';
 import type { Packed } from '@/misc/json-schema.js';
 import { MastodonDataService } from '@/server/api/mastodon/MastodonDataService.js';
+import { UtilityService } from '@/core/UtilityService.js';
 import { GetterService } from '@/server/api/GetterService.js';
+import { CacheService } from '@/core/CacheService.js';
 import { appendContentWarning } from '@/misc/append-content-warning.js';
 import { isRenote } from '@/misc/is-renote.js';
+import { FederatedInstanceService } from '@/core/FederatedInstanceService.js';
+import { promiseMap } from '@/misc/promise-map.js';
 
 // Missing from Megalodon apparently
 // https://docs.joinmastodon.org/entities/StatusEdit/
@@ -56,11 +58,8 @@ export class MastodonConverters {
 		@Inject(DI.config)
 		private readonly config: Config,
 
-		@Inject(DI.userProfilesRepository)
-		private readonly userProfilesRepository: UserProfilesRepository,
-
-		@Inject(DI.noteEditRepository)
-		private readonly noteEditRepository: NoteEditRepository,
+		@Inject(DI.noteEditsRepository)
+		private readonly noteEditsRepository: NoteEditsRepository,
 
 		private readonly mfmService: MfmService,
 		private readonly getterService: GetterService,
@@ -68,6 +67,9 @@ export class MastodonConverters {
 		private readonly idService: IdService,
 		private readonly driveFileEntityService: DriveFileEntityService,
 		private readonly mastodonDataService: MastodonDataService,
+		private readonly federatedInstanceService: FederatedInstanceService,
+		private readonly utilityService: UtilityService,
+		private readonly cacheService: CacheService,
 	) {}
 
 	private encode(u: MiUser, m: IMentionedRemoteUsers): MastodonEntity.Mention {
@@ -133,12 +135,6 @@ export class MastodonConverters {
 		};
 	}
 
-	public async getUser(id: string): Promise<MiUser> {
-		return this.getterService.getUser(id).then(p => {
-			return p;
-		});
-	}
-
 	private encodeField(f: Entity.Field): MastodonEntity.Field {
 		return {
 			name: f.name,
@@ -148,8 +144,10 @@ export class MastodonConverters {
 	}
 
 	public async convertAccount(account: Entity.Account | MiUser): Promise<MastodonEntity.Account> {
-		const user = await this.getUser(account.id);
-		const profile = await this.userProfilesRepository.findOneBy({ userId: user.id });
+		const [user, profile] = await Promise.all([
+			this.getterService.getUser(account.id),
+			this.cacheService.userProfileCache.fetchMaybe(account.id),
+		]);
 		const emojis = await this.customEmojiService.populateEmojis(user.emojis, user.host ? user.host : this.config.host);
 		const emoji: Entity.Emoji[] = [];
 		Object.entries(emojis).forEach(entry => {
@@ -173,7 +171,7 @@ export class MastodonConverters {
 
 		const bioText = profile?.description && this.mfmService.toMastoApiHtml(mfm.parse(profile.description));
 
-		return awaitAll({
+		return await awaitAll({
 			id: account.id,
 			username: user.username,
 			acct: acct,
@@ -198,7 +196,7 @@ export class MastodonConverters {
 			discoverable: user.isExplorable,
 			noindex: user.noindex,
 			group: null,
-			suspended: user.isSuspended,
+			suspended: !this.utilityService.isActiveUser(user),
 			limited: user.isSilenced,
 		});
 	}
@@ -209,9 +207,10 @@ export class MastodonConverters {
 			return [];
 		}
 
-		const noteUser = await this.getUser(note.userId);
+		const noteUser = await this.getterService.getUser(note.userId);
+		const noteInstance = noteUser.instance ?? (noteUser.host ? await this.federatedInstanceService.fetch(noteUser.host) : null);
 		const account = await this.convertAccount(noteUser);
-		const edits = await this.noteEditRepository.find({ where: { noteId: note.id }, order: { id: 'ASC' } });
+		const edits = await this.noteEditsRepository.find({ where: { noteId: note.id }, order: { id: 'ASC' } });
 		const history: StatusEdit[] = [];
 
 		const mentionedRemoteUsers = JSON.parse(note.mentionedRemoteUsers);
@@ -224,7 +223,16 @@ export class MastodonConverters {
 			// TODO avoid re-packing files for each edit
 			const files = await this.driveFileEntityService.packManyByIds(edit.fileIds);
 
-			const cw = appendContentWarning(edit.cw, noteUser.mandatoryCW) ?? '';
+			let cw = edit.cw ?? '';
+			if (note.mandatoryCW) {
+				cw = appendContentWarning(cw, note.mandatoryCW);
+			}
+			if (noteUser.mandatoryCW) {
+				cw = appendContentWarning(cw, noteUser.mandatoryCW);
+			}
+			if (noteInstance?.mandatoryCW) {
+				cw = appendContentWarning(cw, noteInstance.mandatoryCW);
+			}
 
 			const isQuote = renote && (edit.cw || edit.newText || edit.fileIds.length > 0 || note.replyId);
 			const quoteUri = isQuote
@@ -255,7 +263,7 @@ export class MastodonConverters {
 	public async convertStatus(status: Entity.Status, me: MiLocalUser | null, hints?: { note?: MiNote, user?: MiUser }): Promise<MastodonEntity.Status> {
 		const convertedAccount = this.convertAccount(status.account);
 		const note = hints?.note ?? await this.mastodonDataService.requireNote(status.id, me);
-		const noteUser = hints?.user ?? note.user ?? await this.getUser(status.account.id);
+		const noteUser = hints?.user ?? note.user ?? await this.getterService.getUser(status.account.id);
 		const mentionedRemoteUsers = JSON.parse(note.mentionedRemoteUsers);
 
 		const emojis = await this.customEmojiService.populateEmojis(note.emojis, noteUser.host ? noteUser.host : this.config.host);
@@ -271,11 +279,8 @@ export class MastodonConverters {
 			});
 		});
 
-		const mentions = Promise.all(note.mentions.map(p =>
-			this.getUser(p)
-				.then(u => this.encode(u, mentionedRemoteUsers))
-				.catch(() => null)))
-			.then((p: Entity.Mention[]) => p.filter(m => m));
+		const mentionedUsers = await this.cacheService.findUsersById(note.mentions);
+		const mentions = mentionedUsers.values().map(u => this.encode(u, mentionedRemoteUsers)).toArray();
 
 		const tags = note.tags.map(tag => {
 			return {
@@ -299,7 +304,13 @@ export class MastodonConverters {
 			? quoteUri.then(quote => this.mfmService.toMastoApiHtml(mfm.parse(text), mentionedRemoteUsers, false, quote) ?? escapeMFM(text))
 			: '';
 
-		const cw = appendContentWarning(note.cw, noteUser.mandatoryCW) ?? '';
+		let cw = note.cw ?? '';
+		if (note.mandatoryCW) {
+			cw = appendContentWarning(cw, note.mandatoryCW);
+		}
+		if (noteUser.mandatoryCW) {
+			cw = appendContentWarning(cw, noteUser.mandatoryCW);
+		}
 
 		const reblogged = await this.mastodonDataService.hasReblog(note.id, me);
 
@@ -327,7 +338,7 @@ export class MastodonConverters {
 			sensitive: status.sensitive || !!cw,
 			spoiler_text: cw,
 			visibility: status.visibility,
-			media_attachments: status.media_attachments.map((a: Entity.Account) => convertAttachment(a)),
+			media_attachments: status.media_attachments.map((a: Entity.Attachment) => convertAttachment(a)),
 			mentions: mentions,
 			tags: tags,
 			card: null, //FIXME
@@ -345,7 +356,7 @@ export class MastodonConverters {
 	public async convertConversation(conversation: Entity.Conversation, me: MiLocalUser | null): Promise<MastodonEntity.Conversation> {
 		return {
 			id: conversation.id,
-			accounts: await Promise.all(conversation.accounts.map((a: Entity.Account) => this.convertAccount(a))),
+			accounts: await promiseMap(conversation.accounts, async (a: Entity.Account) => await this.convertAccount(a), { limiter: 2 }),
 			last_status: conversation.last_status ? await this.convertStatus(conversation.last_status, me) : null,
 			unread: conversation.unread,
 		};
@@ -366,7 +377,7 @@ export class MastodonConverters {
 			created_at: notification.created_at,
 			id: notification.id,
 			status,
-			type: convertNotificationType(notification.type as NotificationType),
+			type: convertNotificationType(notification.type as Entity.NotificationType),
 		};
 	}
 
@@ -385,7 +396,7 @@ function simpleConvert<T>(data: T): T {
 	return Object.assign({}, data);
 }
 
-function convertNotificationType(type: NotificationType): MastodonNotificationType {
+function convertNotificationType(type: Entity.NotificationType): MastodonEntity.NotificationType {
 	switch (type) {
 		case 'emoji_reaction': return 'reaction';
 		case 'poll_vote':
@@ -393,7 +404,7 @@ function convertNotificationType(type: NotificationType): MastodonNotificationTy
 			return 'poll';
 		// Not supported by mastodon
 		case 'move':
-			return type as MastodonNotificationType;
+			return type as MastodonEntity.NotificationType;
 		default: return type;
 	}
 }

@@ -628,6 +628,15 @@ SPDX-License-Identifier: AGPL-3.0-only
 								</MkPreferenceContainer>
 							</SearchMarker>
 
+							<SearchMarker :keywords="['swipe', 'pull', 'refresh']">
+								<MkPreferenceContainer k="enablePullToRefresh">
+									<MkSwitch v-model="enablePullToRefresh">
+										<template #label><SearchLabel>{{ i18n.ts._settings.enablePullToRefresh }}</SearchLabel></template>
+										<template #caption><SearchKeyword>{{ i18n.ts._settings.enablePullToRefresh_description }}</SearchKeyword></template>
+									</MkSwitch>
+								</MkPreferenceContainer>
+							</SearchMarker>
+
 							<SearchMarker :keywords="['keep', 'screen', 'display', 'on']">
 								<MkPreferenceContainer k="keepScreenOn">
 									<MkSwitch v-model="keepScreenOn">
@@ -691,7 +700,14 @@ SPDX-License-Identifier: AGPL-3.0-only
 								<option value="1"><span style="font-size: 15px;">Aa</span></option>
 								<option value="2"><span style="font-size: 16px;">Aa</span></option>
 								<option value="3"><span style="font-size: 17px;">Aa</span></option>
+								<option value="custom"><span style="font-size: 14px;">Custom</span></option>
 							</MkRadios>
+						</SearchMarker>
+
+						<SearchMarker :keywords="['font', 'size']">
+							<MkInput v-model="customFontSize" :min="12" :max="48" type="number" :step="1" :manualSave="true" :disabled="fontSize !== 'custom'">
+								<template #label><SearchLabel>{{ i18n.ts.customFontSize }}</SearchLabel></template>
+							</MkInput>
 						</SearchMarker>
 
 						<SearchMarker :keywords="['font', 'system', 'native']">
@@ -820,6 +836,15 @@ SPDX-License-Identifier: AGPL-3.0-only
 								</MkPreferenceContainer>
 							</SearchMarker>
 
+							<SearchMarker :keywords="['warn', 'external', 'url']">
+								<MkPreferenceContainer k="trustedDomains">
+									<MkTextarea v-model="trustedDomains" :debounce="true" :spellcheck="false">
+										<template #label><SearchLabel>{{ i18n.ts.trustedDomainsList }}</SearchLabel></template>
+										<template #caption>{{ i18n.ts.trustedDomainsListDescription }}</template>
+									</MkTextarea>
+								</MkPreferenceContainer>
+							</SearchMarker>
+
 							<SearchMarker :keywords="['image', 'photo', 'picture', 'media', 'thumbnail', 'new', 'tab']">
 								<MkPreferenceContainer k="imageNewTab">
 									<MkSwitch v-model="imageNewTab">
@@ -888,10 +913,10 @@ SPDX-License-Identifier: AGPL-3.0-only
 							</MkFolder>
 						</SearchMarker>
 
-						<SearchMarker :keywords="['ad', 'show']">
+						<SearchMarker :keywords="['ad', 'show', 'hide']">
 							<MkPreferenceContainer k="forceShowAds">
-								<MkSwitch v-model="forceShowAds">
-									<template #label><SearchLabel>{{ i18n.ts.forceShowAds }}</SearchLabel></template>
+								<MkSwitch v-model="hideAds" :disabled="!$i.policies.canHideAds">
+									<template #label><SearchLabel>{{ i18n.ts.hideAds }}</SearchLabel></template>
 								</MkSwitch>
 							</MkPreferenceContainer>
 						</SearchMarker>
@@ -958,6 +983,7 @@ import FormLink from '@/components/form/link.vue';
 import MkLink from '@/components/MkLink.vue';
 import MkInfo from '@/components/MkInfo.vue';
 import MkInput from '@/components/MkInput.vue';
+import MkTextarea from '@/components/MkTextarea.vue';
 import { store } from '@/store.js';
 import * as os from '@/os.js';
 import { misskeyApi } from '@/utility/misskey-api.js';
@@ -1032,6 +1058,7 @@ const animatedMfm = prefer.model('animatedMfm');
 const disableShowingAnimatedImages = prefer.model('disableShowingAnimatedImages');
 const keepScreenOn = prefer.model('keepScreenOn');
 const enableHorizontalSwipe = prefer.model('enableHorizontalSwipe');
+const enablePullToRefresh = prefer.model('enablePullToRefresh');
 const useNativeUiForVideoAudioPlayer = prefer.model('useNativeUiForVideoAudioPlayer');
 const contextMenu = prefer.model('contextMenu');
 const menuStyle = prefer.model('menuStyle');
@@ -1061,8 +1088,17 @@ const defaultCW = ref($i.defaultCW);
 const defaultCWPriority = ref($i.defaultCWPriority);
 const lang = prefer.model('lang');
 const fontSize = prefer.model('fontSize');
+const customFontSize = prefer.model('customFontSize');
 const useSystemFont = prefer.model('useSystemFont');
 const cornerRadius = prefer.model('cornerRadius');
+const trustedDomains = prefer.model(
+	'trustedDomains',
+	(domainsList) => domainsList.join('\n'),
+	(domainsString) => domainsString.split('\n').map( d => d.trim() ).filter( x => x.length > 0),
+);
+
+// Inverted to map between "hide ads" and "force show ads"
+const hideAds = prefer.model('forceShowAds', x => !x, x => !x);
 
 watch([
 	hemisphere,
@@ -1088,6 +1124,8 @@ watch([
 	keepScreenOn,
 	contextMenu,
 	makeEveryTextElementsSelectable,
+	enableHorizontalSwipe,
+	enablePullToRefresh,
 	noteDesign,
 ], async () => {
 	await reloadAsk({ reason: i18n.ts.reloadToApplySetting, unison: true });

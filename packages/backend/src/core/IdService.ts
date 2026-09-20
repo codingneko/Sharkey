@@ -7,6 +7,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ulid } from 'ulid';
 import { DI } from '@/di-symbols.js';
 import type { Config } from '@/config.js';
+import { TimeService } from '@/global/TimeService.js';
 import { genAid, isSafeAidT, parseAid, parseAidFull } from '@/misc/id/aid.js';
 import { genAidx, isSafeAidxT, parseAidx, parseAidxFull } from '@/misc/id/aidx.js';
 import { genMeid, isSafeMeidT, parseMeid, parseMeidFull } from '@/misc/id/meid.js';
@@ -15,13 +16,17 @@ import { genObjectId, isSafeObjectIdT, parseObjectId, parseObjectIdFull } from '
 import { bindThis } from '@/decorators.js';
 import { parseUlid, parseUlidFull } from '@/misc/id/ulid.js';
 
+const MAX_SIMPLE_ID = Math.pow(2, 50);
+
 @Injectable()
 export class IdService {
-	private method: string;
+	private readonly method: string;
 
 	constructor(
+		private readonly timeService: TimeService,
+
 		@Inject(DI.config)
-		private config: Config,
+		config: Config,
 	) {
 		this.method = config.id.toLowerCase();
 	}
@@ -45,7 +50,7 @@ export class IdService {
 	 */
 	@bindThis
 	public gen(time?: number): string {
-		const t = (!time || (time > Date.now())) ? Date.now() : time;
+		const t = (!time || (time > this.timeService.now)) ? this.timeService.now : time;
 
 		switch (this.method) {
 			case 'aid': return genAid(t);
@@ -56,6 +61,25 @@ export class IdService {
 			case 'objectid': return genObjectId(t);
 			default: throw new Error('unrecognized id generation method');
 		}
+	}
+
+	/**
+	 * Returns a non-cryptographically-secure 50-bit random ID encoded as a base-26 string.
+	 * The output of this function is always 10 characters exactly, as 50 bits fits perfectly into 10 characters at 5 bits-per-character.
+	 *
+	 * Keep in sync with frontend randomId().
+	 *
+	 * @param random 	Unit float (0.0 to 1.0) used as source of random.
+	 * 								Exposed for unit testing only; should be undefined for production mode!
+	 * @returns 10-digit string containing 50 bits of non-secure entropy.
+	 */
+	@bindThis
+	public genSimple(random?: number): string {
+		if (random != null && random < 0) throw new Error(`random basis out of range: ${random}`);
+		if (random != null && random > 1) throw new Error(`random basis out of range: ${random}`);
+		const randomFloat = random ?? Math.random();
+		const randomInt = Math.round(randomFloat * MAX_SIMPLE_ID);
+		return randomInt.toString(26).padStart(10, '0');
 	}
 
 	@bindThis

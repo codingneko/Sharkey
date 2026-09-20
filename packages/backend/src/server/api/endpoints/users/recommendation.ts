@@ -10,6 +10,7 @@ import { Endpoint } from '@/server/api/endpoint-base.js';
 import { QueryService } from '@/core/QueryService.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import { DI } from '@/di-symbols.js';
+import { TimeService } from '@/global/TimeService.js';
 
 export const meta = {
 	tags: ['users'],
@@ -26,7 +27,7 @@ export const meta = {
 		items: {
 			type: 'object',
 			optional: false, nullable: false,
-			ref: 'UserDetailed',
+			ref: 'User',
 		},
 	},
 
@@ -42,6 +43,11 @@ export const paramDef = {
 	properties: {
 		limit: { type: 'integer', minimum: 1, maximum: 100, default: 10 },
 		offset: { type: 'integer', default: 0 },
+		detail: {
+			type: 'boolean',
+			nullable: false,
+			default: true,
+		},
 	},
 	required: [],
 } as const;
@@ -57,13 +63,14 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 		private userEntityService: UserEntityService,
 		private queryService: QueryService,
+		private readonly timeService: TimeService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			const query = this.usersRepository.createQueryBuilder('user')
 				.where('user.isLocked = FALSE')
 				.andWhere('user.isExplorable = TRUE')
 				.andWhere('user.host IS NULL')
-				.andWhere('user.updatedAt >= :date', { date: new Date(Date.now() - ms('7days')) })
+				.andWhere('user.updatedAt >= :date', { date: new Date(this.timeService.now - ms('7days')) })
 				.andWhere('user.id != :meId', { meId: me.id })
 				.orderBy('user.followersCount', 'DESC');
 
@@ -83,7 +90,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 			const users = await query.limit(ps.limit).offset(ps.offset).getMany();
 
-			return await this.userEntityService.packMany(users, me, { schema: 'UserDetailed' });
+			return await this.userEntityService.packMany(users, me, { schema: ps.detail ? 'UserDetailed' : 'UserLite' });
 		});
 	}
 }

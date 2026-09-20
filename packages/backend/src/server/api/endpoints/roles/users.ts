@@ -8,6 +8,7 @@ import { Brackets } from 'typeorm';
 import type { RoleAssignmentsRepository, RolesRepository } from '@/models/_.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { QueryService } from '@/core/QueryService.js';
+import { TimeService } from '@/global/TimeService.js';
 import { DI } from '@/di-symbols.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import { ApiError } from '../../error.js';
@@ -37,7 +38,7 @@ export const meta = {
 				},
 				user: {
 					type: 'object',
-					ref: 'UserDetailed',
+					ref: 'User',
 				},
 			},
 			required: ['id', 'user'],
@@ -58,6 +59,11 @@ export const paramDef = {
 		sinceId: { type: 'string', format: 'misskey:id' },
 		untilId: { type: 'string', format: 'misskey:id' },
 		limit: { type: 'integer', minimum: 1, maximum: 100, default: 10 },
+		detail: {
+			type: 'boolean',
+			nullable: false,
+			default: true,
+		},
 	},
 	required: ['roleId'],
 } as const;
@@ -73,6 +79,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 		private queryService: QueryService,
 		private userEntityService: UserEntityService,
+		private readonly timeService: TimeService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			const role = await this.rolesRepository.findOneBy({
@@ -90,7 +97,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				.andWhere(new Brackets(qb => {
 					qb
 						.where('assign.expiresAt IS NULL')
-						.orWhere('assign.expiresAt > :now', { now: new Date() });
+						.orWhere('assign.expiresAt > :now', { now: this.timeService.date });
 				}))
 				.innerJoinAndSelect('assign.user', 'user');
 
@@ -99,11 +106,11 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				.getMany();
 
 			const _users = assigns.map(({ user, userId }) => user ?? userId);
-			const _userMap = await this.userEntityService.packMany(_users, me, { schema: 'UserDetailed' })
+			const _userMap = await this.userEntityService.packMany(_users, me, { schema: ps.detail ? 'UserDetailed' : 'UserLite' })
 				.then(users => new Map(users.map(u => [u.id, u])));
 			return await Promise.all(assigns.map(async assign => ({
 				id: assign.id,
-				user: _userMap.get(assign.userId) ?? await this.userEntityService.pack(assign.user!, me, { schema: 'UserDetailed' }),
+				user: _userMap.get(assign.userId) ?? await this.userEntityService.pack(assign.user!, me, { schema: ps.detail ? 'UserDetailed' : 'UserLite' }),
 			})));
 		});
 	}

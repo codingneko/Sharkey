@@ -14,6 +14,8 @@ import { IdService } from '@/core/IdService.js';
 import { QueryService } from '@/core/QueryService.js';
 import { MiLocalUser } from '@/models/User.js';
 import { FanoutTimelineEndpointService } from '@/core/FanoutTimelineEndpointService.js';
+import { UserListService } from '@/core/UserListService.js';
+import { UserService } from '@/core/UserService.js';
 import { ApiError } from '../../error.js';
 
 export const meta = {
@@ -87,19 +89,24 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private idService: IdService,
 		private fanoutTimelineEndpointService: FanoutTimelineEndpointService,
 		private queryService: QueryService,
+		private readonly userListService: UserListService,
+		private readonly userService: UserService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			const untilId = ps.untilId ?? (ps.untilDate ? this.idService.gen(ps.untilDate!) : null);
 			const sinceId = ps.sinceId ?? (ps.sinceDate ? this.idService.gen(ps.sinceDate!) : null);
 
-			const list = await this.userListsRepository.findOneBy({
-				id: ps.listId,
-				userId: me.id,
-			});
+			const list = await this.userListService.userListsCache.fetchMaybe(ps.listId);
 
 			if (list == null) {
 				throw new ApiError(meta.errors.noSuchList);
 			}
+
+			if (!list.isPublic && list.userId !== me.id) {
+				throw new ApiError(meta.errors.noSuchList);
+			}
+
+			this.userService.markUserActive(me);
 
 			if (!this.serverSettings.enableFanoutTimeline) {
 				const timeline = await this.getFromDb(list, {
@@ -109,10 +116,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 					withFiles: ps.withFiles,
 					withRenotes: ps.withRenotes,
 				}, me);
-
-				process.nextTick(() => {
-					this.activeUsersChart.read(me);
-				});
 
 				return await this.noteEntityService.packMany(timeline, me);
 			}
@@ -125,8 +128,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				me,
 				useDbFallback: this.serverSettings.enableFanoutTimelineDbFallback,
 				redisTimelines: ps.withFiles ? [`userListTimelineWithFiles:${list.id}`] : [`userListTimeline:${list.id}`],
-				alwaysIncludeMyNotes: true,
 				excludePureRenotes: !ps.withRenotes,
+				ignoreAuthorFromUserSilence: true,
 				dbFallback: async (untilId, sinceId, limit) => await this.getFromDb(list, {
 					untilId,
 					sinceId,
@@ -134,10 +137,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 					withFiles: ps.withFiles,
 					withRenotes: ps.withRenotes,
 				}, me),
-			});
-
-			process.nextTick(() => {
-				this.activeUsersChart.read(me);
 			});
 
 			return timeline;
@@ -156,16 +155,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			.innerJoin(this.userListMembershipsRepository.metadata.targetName, 'userListMemberships', 'userListMemberships.userId = note.userId')
 			.andWhere('userListMemberships.userListId = :userListId', { userListId: list.id })
 			.andWhere('note.channelId IS NULL') // チャンネルノートではない
-			.andWhere(new Brackets(qb => qb
-				// 返信ではない
-				.orWhere('note.replyId IS NULL')
-				// 返信だけど投稿者自身への返信
-				.orWhere('note.replyUserId = note.userId')
-				// 返信だけど自分宛ての返信
-				.orWhere('note.replyUserId = :meId')
-				// 返信だけどwithRepliesがtrueの場合
-				.orWhere('userListMemberships.withReplies = true'),
-			))
 			.setParameters({ meId: me.id })
 			.innerJoinAndSelect('note.user', 'user')
 			.leftJoinAndSelect('note.reply', 'reply')
@@ -174,9 +163,12 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			.leftJoinAndSelect('renote.user', 'renoteUser')
 			.limit(ps.limit);
 
+		this.queryService.generateExcludedRepliesQueryForNotes(query, me, 'userListMemberships.withReplies');
 		this.queryService.generateVisibilityQuery(query, me);
 		this.queryService.generateBlockedHostQueryForNote(query);
-		this.queryService.generateMutedUserQueryForNotes(query, me);
+		this.queryService.generateSuspendedUserQueryForNote(query);
+		this.queryService.generateSilencedUserQueryForNotes(query, me, true);
+		this.queryService.generateMutedUserQueryForNotes(query, me, true);
 		this.queryService.generateBlockedUserQueryForNotes(query, me);
 
 		if (ps.withFiles) {

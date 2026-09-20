@@ -4,36 +4,58 @@
  */
 
 import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
-import * as Redis from 'ioredis';
 import type { MiUser } from '@/models/User.js';
 import type { UserKeypairsRepository } from '@/models/_.js';
-import { MemoryKVCache, RedisKVCache } from '@/misc/cache.js';
 import type { MiUserKeypair } from '@/models/UserKeypair.js';
 import { DI } from '@/di-symbols.js';
 import { bindThis } from '@/decorators.js';
+import { IsOne } from '@/misc/is-one.js';
+import { CacheManagementService, type ManagedQuantumKVCache } from '@/global/CacheManagementService.js';
+import { InternalEventService, type InternalEventTypes } from '@/global/InternalEventService.js';
 
 @Injectable()
 export class UserKeypairService implements OnApplicationShutdown {
-	private cache: MemoryKVCache<MiUserKeypair>;
+	public readonly userKeypairCache: ManagedQuantumKVCache<MiUserKeypair>;
 
 	constructor(
-		@Inject(DI.redis)
-		private redisClient: Redis.Redis,
-
 		@Inject(DI.userKeypairsRepository)
 		private userKeypairsRepository: UserKeypairsRepository,
+
+		private readonly internalEventService: InternalEventService,
+
+		cacheManagementService: CacheManagementService,
 	) {
-		this.cache = new MemoryKVCache<MiUserKeypair>(1000 * 60 * 60 * 24); // 24h
+		this.userKeypairCache = cacheManagementService.createQuantumKVCache('userKeypair', {
+			lifetime: 1000 * 60 * 60, // 1h
+			fetcher: async userId => await this.userKeypairsRepository.findOneByOrFail({ userId }),
+			optionalFetcher: async userId => await this.userKeypairsRepository.findOneBy({ userId }),
+			bulkFetcher: async userIds => {
+				const keypairs = await this.userKeypairsRepository.findBy({ userId: IsOne(userIds) });
+				return keypairs.map(keypair => [keypair.userId, keypair]);
+			},
+		});
+
+		this.internalEventService.on('userChangeDeletedState', this.onUserDeleted);
 	}
 
 	@bindThis
 	public async getUserKeypair(userId: MiUser['id']): Promise<MiUserKeypair> {
-		return await this.cache.fetch(userId, () => this.userKeypairsRepository.findOneByOrFail({ userId }));
+		return await this.userKeypairCache.fetch(userId);
+	}
+
+	@bindThis
+	public async getUserKeypairMaybe(userId: MiUser['id']): Promise<MiUserKeypair | undefined> {
+		return await this.userKeypairCache.fetchMaybe(userId);
+	}
+
+	@bindThis
+	private async onUserDeleted(body: InternalEventTypes['userChangeDeletedState']): Promise<void> {
+		await this.userKeypairCache.delete(body.id);
 	}
 
 	@bindThis
 	public dispose(): void {
-		this.cache.dispose();
+		this.internalEventService.off('userChangeDeletedState', this.onUserDeleted);
 	}
 
 	@bindThis

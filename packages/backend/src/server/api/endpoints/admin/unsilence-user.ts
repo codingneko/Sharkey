@@ -9,7 +9,7 @@ import type { UsersRepository } from '@/models/_.js';
 import { DI } from '@/di-symbols.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
 import { CacheService } from '@/core/CacheService.js';
-import { GlobalEventService } from '@/core/GlobalEventService.js';
+import { InternalEventService } from '@/global/InternalEventService.js';
 
 export const meta = {
 	tags: ['admin'],
@@ -34,23 +34,24 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private readonly usersRepository: UsersRepository,
 		private readonly cacheService: CacheService,
 		private readonly moderationLogService: ModerationLogService,
-		private readonly globalEventService: GlobalEventService,
+		private readonly internalEventService: InternalEventService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			const user = await this.cacheService.findUserById(ps.userId);
+
+			if (!user.isSilenced) return;
+
+			await this.usersRepository.update({ id: user.id }, {
+				isSilenced: false,
+			});
+			await this.internalEventService.emit(user.host == null ? 'localUserUpdated' : 'remoteUserUpdated', {
+				id: user.id,
+			});
 
 			await this.moderationLogService.log(me, 'unSilenceUser', {
 				userId: ps.userId,
 				userUsername: user.username,
 				userHost: user.host,
-			});
-
-			await this.usersRepository.update(user.id, {
-				isSilenced: false,
-			});
-
-			this.globalEventService.publishInternalEvent(user.host == null ? 'localUserUpdated' : 'remoteUserUpdated', {
-				id: user.id,
 			});
 		});
 	}

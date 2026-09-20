@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import * as Misskey from 'misskey-js';
+import type * as Misskey from 'misskey-js';
 import { ref } from 'vue';
 import { apiUrl } from '@@/js/config.js';
 import { $i } from '@/i.js';
@@ -143,4 +143,22 @@ export function misskeyApiGet<
 	promise.then(onFinally, onFinally);
 
 	return promise;
+}
+
+export function printError(error: unknown): string {
+	if (error != null && typeof(error) === 'object') {
+		if ('info' in error && typeof (error.info) === 'object' && error.info) {
+			if ('e' in error.info && typeof (error.info.e) === 'object' && error.info.e) {
+				if ('message' in error.info.e && typeof (error.info.e.message) === 'string') return error.info.e.message;
+				if ('code' in error.info.e && typeof (error.info.e.code) === 'string') return error.info.e.code;
+				if ('id' in error.info.e && typeof (error.info.e.id) === 'string') return error.info.e.id;
+			}
+		}
+
+		if ('message' in error && typeof (error.message) === 'string') return error.message;
+		if ('code' in error && typeof (error.code) === 'string') return error.code;
+		if ('id' in error && typeof (error.id) === 'string') return error.id;
+	}
+
+	return String(error);
 }

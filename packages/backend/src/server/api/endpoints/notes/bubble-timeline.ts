@@ -8,7 +8,7 @@ import type { NotesRepository } from '@/models/_.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { QueryService } from '@/core/QueryService.js';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
-import ActiveUsersChart from '@/core/chart/charts/active-users.js';
+import { UserService } from '@/core/UserService.js';
 import { DI } from '@/di-symbols.js';
 import { RoleService } from '@/core/RoleService.js';
 import { ApiError } from '../../error.js';
@@ -65,12 +65,16 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private noteEntityService: NoteEntityService,
 		private queryService: QueryService,
 		private roleService: RoleService,
-		private activeUsersChart: ActiveUsersChart,
+		private readonly userService: UserService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
-			const policies = await this.roleService.getUserPolicies(me ? me.id : null);
+			const policies = await this.roleService.getUserPolicies(me);
 			if (!policies.btlAvailable) {
 				throw new ApiError(meta.errors.btlDisabled);
+			}
+
+			if (me) {
+				this.userService.markUserActive(me);
 			}
 
 			//#region Construct query
@@ -93,13 +97,16 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				.leftJoin('(select "host" from "instance" where "isBubbled" = true)', 'bubbleInstance', '"bubbleInstance"."host" = "note"."userHost"')
 				.andWhere('"bubbleInstance" IS NOT NULL');
 			this.queryService
-				.leftJoinInstance(query, 'note.userInstance', 'userInstance', '"userInstance"."host" = "bubbleInstance"."host"');
+				.leftJoin(query, 'note.userInstance', 'userInstance');
 
+			this.queryService.generateExcludedRepliesQueryForNotes(query, me);
 			this.queryService.generateBlockedHostQueryForNote(query);
+			this.queryService.generateSuspendedUserQueryForNote(query);
 			this.queryService.generateSilencedUserQueryForNotes(query, me);
 			if (me) {
 				this.queryService.generateMutedUserQueryForNotes(query, me);
 				this.queryService.generateBlockedUserQueryForNotes(query, me);
+				this.queryService.generateMutedNoteThreadQuery(query, me);
 			}
 
 			if (ps.withFiles) {
@@ -116,13 +123,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			//#endregion
 
 			const timeline = await query.getMany();
-
-			if (me) {
-				process.nextTick(() => {
-					this.activeUsersChart.read(me);
-				});
-			}
-
 			return await this.noteEntityService.packMany(timeline, me);
 		});
 	}

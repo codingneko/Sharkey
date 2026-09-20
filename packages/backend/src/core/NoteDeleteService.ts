@@ -3,11 +3,16 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { Brackets, In, IsNull, Not } from 'typeorm';
 import { Injectable, Inject } from '@nestjs/common';
 import type { MiUser, MiLocalUser, MiRemoteUser } from '@/models/User.js';
-import { MiNote, IMentionedRemoteUsers } from '@/models/Note.js';
-import type { InstancesRepository, MiMeta, NotesRepository, UsersRepository } from '@/models/_.js';
+import type { MiNote } from '@/models/Note.js';
+import type {
+	InstancesRepository,
+	MiMeta,
+	NotesRepository,
+	UsersRepository,
+} from '@/models/_.js';
+import type { IActivity } from '@/core/activitypub/type.js';
 import { RelayService } from '@/core/RelayService.js';
 import { FederatedInstanceService } from '@/core/FederatedInstanceService.js';
 import { DI } from '@/di-symbols.js';
@@ -18,20 +23,22 @@ import InstanceChart from '@/core/chart/charts/instance.js';
 import { GlobalEventService } from '@/core/GlobalEventService.js';
 import { ApRendererService } from '@/core/activitypub/ApRendererService.js';
 import { ApDeliverManagerService } from '@/core/activitypub/ApDeliverManagerService.js';
-import { UserEntityService } from '@/core/entities/UserEntityService.js';
+import { isPureRenote } from '@/misc/is-renote.js';
+import { isRemoteUser } from '@/models/User.js';
 import { bindThis } from '@/decorators.js';
+import { IsOne } from '@/misc/is-one.js';
 import { SearchService } from '@/core/SearchService.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
-import { isQuote, isRenote } from '@/misc/is-renote.js';
 import { LatestNoteService } from '@/core/LatestNoteService.js';
 import { ApLogService } from '@/core/ApLogService.js';
-import Logger from '@/logger.js';
-import { LoggerService } from './LoggerService.js';
+import { TimeService } from '@/global/TimeService.js';
+import { CollapsedQueueService } from '@/core/CollapsedQueueService.js';
+import { Deduplicator } from '@/misc/deduplicator.js';
+import { CountingSet } from '@/misc/CountingSet.js';
+import { CacheService } from '@/core/CacheService.js';
 
 @Injectable()
 export class NoteDeleteService {
-	private readonly logger: Logger;
-
 	constructor(
 		@Inject(DI.config)
 		private config: Config,
@@ -48,7 +55,6 @@ export class NoteDeleteService {
 		@Inject(DI.instancesRepository)
 		private instancesRepository: InstancesRepository,
 
-		private userEntityService: UserEntityService,
 		private globalEventService: GlobalEventService,
 		private relayService: RelayService,
 		private federatedInstanceService: FederatedInstanceService,
@@ -61,202 +67,275 @@ export class NoteDeleteService {
 		private instanceChart: InstanceChart,
 		private latestNoteService: LatestNoteService,
 		private readonly apLogService: ApLogService,
-		loggerService: LoggerService,
-	) {
-		this.logger = loggerService.getLogger('note-delete-service');
-	}
+		private readonly timeService: TimeService,
+		private readonly collapsedQueueService: CollapsedQueueService,
+		private readonly cacheService: CacheService,
+	) {}
 
 	/**
 	 * 投稿を削除します。
-	 * @param user 投稿者
-	 * @param note 投稿
 	 */
-	async delete(user: { id: MiUser['id']; uri: MiUser['uri']; host: MiUser['host']; isBot: MiUser['isBot']; }, note: MiNote, quiet = false, deleter?: MiUser) {
-		const deletedAt = new Date();
+	async delete(user: MiUser, note: MiNote, deleter?: MiUser, immediate = false): Promise<void> {
+		if (note.userId !== user.id) {
+			throw new Error(`Not deleting note ${note.id} because user ${user.id} is not the expected author ${note.userId}. This is likely a bug; please report this error to Sharkey team.`);
+		}
+
+		// This kicks off lots of things that can run in parallel, but we should still wait for completion to ensure consistent state and to avoid task flood when calling in a loop.
+		const promises: Promise<unknown>[] = [];
+
+		const deletedAt = this.timeService.date;
 		const cascadingNotes = await this.findCascadingNotes(note);
+		const allNotes = [note, ...cascadingNotes];
 
-		if (note.replyId) {
-			await this.notesRepository.decrement({ id: note.replyId }, 'repliesCount', 1);
+		const noteDeduplicator = new Deduplicator<MiNote>(
+			async id => await this.notesRepository.findOneByOrFail({ id }),
+			allNotes.map(note => [note.id, note]),
+		);
+
+		// Increment updateNoteQueue
+		for (const note of allNotes) {
+			if (note.replyId) {
+				this.collapsedQueueService.updateNoteQueue.enqueue(note.replyId, { repliesCountDelta: -1 });
+			} else if (isPureRenote(note)) {
+				this.collapsedQueueService.updateNoteQueue.enqueue(note.renoteId, { renoteCountDelta: -1 });
+			}
 		}
 
-		if (note.renoteId && note.text == null && !note.hasPoll && (note.fileIds == null || note.fileIds.length === 0)) {
-			await this.notesRepository.findOneBy({ id: note.renoteId }).then(async (renote) => {
-				if (!renote) return;
-				if (renote.userId !== user.id) await this.notesRepository.decrement({ id: renote.id }, 'renoteCount', 1);
-			});
-		}
-
-		if (!quiet) {
-			this.globalEventService.publishNoteStream(note.id, 'deleted', {
-				deletedAt: deletedAt,
-			});
-
-			//#region ローカルの投稿なら削除アクティビティを配送
-			if (this.userEntityService.isLocalUser(user) && !note.localOnly) {
-				let renote: MiNote | null = null;
-
-				// if deleted note is renote
-				if (isRenote(note) && !isQuote(note)) {
-					renote = await this.notesRepository.findOneBy({
-						id: note.renoteId,
-					});
-				}
-
-				const content = this.apRendererService.addContext(renote
-					? this.apRendererService.renderUndo(this.apRendererService.renderAnnounce(renote.uri ?? `${this.config.url}/notes/${renote.id}`, note), user)
-					: this.apRendererService.renderDelete(this.apRendererService.renderTombstone(`${this.config.url}/notes/${note.id}`), user));
-
-				this.deliverToConcerned(user, note, content);
+		// Braces preserved to avoid merge conflicts
+		{
+			// Publish websocket deleted events
+			for (const note of allNotes) {
+				promises.push(this.globalEventService.publishNoteStream(note.id, 'deleted', {
+					id: note.id,
+					userId: note.userId,
+					body: {
+						deletedAt: deletedAt,
+					},
+				}));
 			}
 
-			// also deliver delete activity to cascaded notes
-			const federatedLocalCascadingNotes = (cascadingNotes).filter(note => !note.localOnly && note.userHost == null); // filter out local-only notes
-			for (const cascadingNote of federatedLocalCascadingNotes) {
-				if (!cascadingNote.user) continue;
-				if (!this.userEntityService.isLocalUser(cascadingNote.user)) continue;
-				const content = this.apRendererService.addContext(this.apRendererService.renderDelete(this.apRendererService.renderTombstone(`${this.config.url}/notes/${cascadingNote.id}`), cascadingNote.user));
-				this.deliverToConcerned(cascadingNote.user, cascadingNote, content);
+			// Federate Delete(Note) or Undo(Announce(Note)) activities
+			//#region ローカルの投稿なら削除アクティビティを配送
+			for (const note of allNotes) {
+				if (note.userHost == null && !note.localOnly) {
+					const apUser = { id: note.userId, host: null };
+
+					if (isPureRenote(note)) {
+						promises.push(noteDeduplicator.fetch(note.renoteId).then(async renote => {
+							const content = this.apRendererService.addContext(this.apRendererService.renderUndo(this.apRendererService.renderAnnounce(renote.uri ?? `${this.config.url}/notes/${renote.id}`, note), apUser));
+							await this.deliverToConcerned(apUser, note, content);
+						}));
+					} else {
+						const content = this.apRendererService.addContext(this.apRendererService.renderDelete(this.apRendererService.renderTombstone(`${this.config.url}/notes/${note.id}`), apUser));
+						promises.push(this.deliverToConcerned(apUser, note, content));
+					}
+				}
 			}
 			//#endregion
 
-			this.notesChart.update(note, false);
-			if (this.meta.enableChartsForRemoteUser || (user.host == null)) {
-				this.perUserNotesChart.update(user, note, false);
+			// Update charts
+			for (const note of allNotes) {
+				this.notesChart.update(note, false);
+				if (this.meta.enableChartsForRemoteUser || (note.userHost == null)) {
+					this.perUserNotesChart.update({ id: note.userId }, note, false);
+				}
 			}
 
-			if (!isRenote(note) || isQuote(note)) {
-				// Decrement notes count (user)
-				this.decNotesCountOfUser(user);
-			} else {
-				this.usersRepository.update({ id: user.id }, { updatedAt: new Date() });
+			// Increment updateUserQueue.
+			// Don't mark cascaded user as updated (active)!
+			this.collapsedQueueService.updateUserQueue.enqueue(user.id, { updatedAt: this.timeService.date });
+
+			for (const note of allNotes) {
+				if (!isPureRenote(note)) {
+					this.collapsedQueueService.updateUserQueue.enqueue(note.userId, { notesCountDelta: -1 });
+				}
 			}
 
+			// Update instance stats and queue
 			if (this.meta.enableStatsForFederatedInstances) {
-				if (this.userEntityService.isRemoteUser(user)) {
-					this.federatedInstanceService.fetchOrRegister(user.host).then(async i => {
-						if (note.renoteId && note.text || !note.renoteId) {
-							this.instancesRepository.decrement({ id: i.id }, 'notesCount', 1);
+				for (const note of allNotes) {
+					if (note.userHost != null) {
+						if (!isPureRenote(note)) {
+							this.collapsedQueueService.updateInstanceQueue.enqueue(note.userHost, { notesCountDelta: -1 });
 						}
 						if (this.meta.enableChartsForFederatedInstances) {
-							this.instanceChart.updateNote(i.host, note, false);
+							this.instanceChart.updateNote(note.userHost, note, false);
 						}
-					});
+					}
 				}
 			}
 		}
 
-		for (const cascadingNote of cascadingNotes) {
-			this.searchService.unindexNote(cascadingNote);
+		// Increment updateChannelQueue
+		promises.push(this.updateChannelCounts(allNotes));
+
+		// Remove from search index
+		for (const note of allNotes) {
+			promises.push(this.searchService.unindexNote(note));
 		}
-		this.searchService.unindexNote(note);
 
-		await this.notesRepository.delete({
-			id: note.id,
-			userId: user.id,
-		});
+		// Actually delete the notes, in reverse order (newest-to-oldest) to minimize load.
+		// Don't put this in the promise array, since it needs to happen before the next section!
+		const sortedNotes = allNotes.toSorted((a, b) => b.id.localeCompare(a.id));
+		for (const note of sortedNotes) {
+			await this.notesRepository.delete({ id: note.id });
+		}
 
-		this.latestNoteService.handleDeletedNoteBG(note);
+		// Update the Latest Note index / following feed *after* note is deleted
+		for (const note of allNotes) {
+			promises.push(immediate
+				? this.latestNoteService.handleDeletedNote(note)
+				: this.latestNoteService.handleDeletedNoteDeferred(note));
+		}
 
-		if (deleter && (note.userId !== deleter.id)) {
-			const user = await this.usersRepository.findOneByOrFail({ id: note.userId });
-			this.moderationLogService.log(deleter, 'deleteNote', {
+		// Write mod log
+		if (deleter && (user.id !== deleter.id)) {
+			promises.push(this.moderationLogService.log(deleter, 'deleteNote', {
 				noteId: note.id,
 				noteUserId: note.userId,
 				noteUserUsername: user.username,
 				noteUserHost: user.host,
-			});
+			}));
 		}
 
-		const deletedUris = [note, ...cascadingNotes]
+		// Delete AP logs
+		const deletedUris = allNotes
 			.map(n => n.uri)
 			.filter((u): u is string => u != null);
 		if (deletedUris.length > 0) {
-			this.apLogService.deleteObjectLogs(deletedUris)
-				.catch(err => this.logger.error(err, `Failed to delete AP logs for note '${note.uri}'`));
+			promises.push(immediate
+				? this.apLogService.deleteObjectLogs(deletedUris)
+				: this.apLogService.deleteObjectLogsDeferred(deletedUris));
 		}
-	}
 
-	@bindThis
-	private decNotesCountOfUser(user: { id: MiUser['id']; }) {
-		this.usersRepository.createQueryBuilder().update()
-			.set({
-				updatedAt: new Date(),
-				notesCount: () => '"notesCount" - 1',
-			})
-			.where('id = :id', { id: user.id })
-			.execute();
+		await Promise.allSettled(promises);
 	}
 
 	@bindThis
 	private async findCascadingNotes(note: MiNote): Promise<MiNote[]> {
-		const recursive = async (noteId: string): Promise<MiNote[]> => {
-			const query = this.notesRepository.createQueryBuilder('note')
-				.where('note.replyId = :noteId', { noteId })
-				.orWhere(new Brackets(q => {
-					q.where('note.renoteId = :noteId', { noteId })
-						.andWhere('note.text IS NOT NULL');
-				}))
-				.leftJoinAndSelect('note.user', 'user');
-			const replies = await query.getMany();
+		const cascadingNotes = new Map<string, MiNote>();
 
-			return [
-				replies,
-				...await Promise.all(replies.map(reply => recursive(reply.id))),
-			].flat();
+		/**
+		 * Finds all replies, quotes, and renotes of the given list of notes.
+		 * These are the notes that will be CASCADE deleted when the origin note is deleted.
+		 *
+		 * This works by operating in "layers" that radiate out from the origin note like a web.
+		 * The process is roughly like this:
+		 *   1. Find all immediate replies and renotes of the origin.
+		 *   2. Find all immediate replies and renotes of the results from step one.
+		 *   3. Repeat until step 2 returns no new results.
+		 *   4. Collect all the step 2 results; those are the set of all cascading notes.
+		 */
+		const cascade = async (layer: string[]): Promise<void> => {
+			const refs = await this.notesRepository.find({
+				where: [
+					{ replyId: IsOne(layer) },
+					{ renoteId: IsOne(layer) },
+				],
+			});
+
+			const nextLayer: string[] = [];
+
+			// Workaround for renote loop bug
+			for (const note of refs) {
+				if (!cascadingNotes.has(note.id)) {
+					cascadingNotes.set(note.id, note);
+					nextLayer.push(note.id);
+				}
+			}
+
+			// Stop when we reach the end of all threads
+			if (nextLayer.length < 1) return;
+
+			await cascade(nextLayer);
 		};
 
-		const cascadingNotes: MiNote[] = await recursive(note.id);
+		// Start with the origin, which should *not* be in the result set!
+		await cascade([note.id]);
 
-		return cascadingNotes;
+		return cascadingNotes.values().toArray();
 	}
 
 	@bindThis
-	private async getMentionedRemoteUsers(note: MiNote) {
-		const where = [] as any[];
-
-		// mention / reply / dm
-		const uris = (JSON.parse(note.mentionedRemoteUsers) as IMentionedRemoteUsers).map(x => x.uri);
-		if (uris.length > 0) {
-			where.push(
-				{ uri: In(uris) },
-			);
-		}
-
-		// renote / quote
-		if (note.renoteUserId) {
-			where.push({
-				id: note.renoteUserId,
-			});
-		}
-
-		if (where.length === 0) return [];
-
-		return await this.usersRepository.find({
-			where,
-		}) as MiRemoteUser[];
+	private async getMentionedRemoteUsers(note: MiNote): Promise<MiRemoteUser[]> {
+		const userIds = [...note.mentions, note.replyUserId, note.renoteUserId].filter(n => n != null);
+		const users = await this.cacheService.findUsersById(userIds);
+		const remoteUsers = users.values().filter(user => isRemoteUser(user));
+		return remoteUsers.toArray();
 	}
 
 	@bindThis
-	private async getRenotedOrRepliedRemoteUsers(note: MiNote) {
-		const query = this.notesRepository.createQueryBuilder('note')
-			.leftJoinAndSelect('note.user', 'user')
-			.where(new Brackets(qb => {
-				qb.orWhere('note.renoteId = :renoteId', { renoteId: note.id });
-				qb.orWhere('note.replyId = :replyId', { replyId: note.id });
-			}))
-			.andWhere({ userHost: Not(IsNull()) });
-		const notes = await query.getMany() as (MiNote & { user: MiRemoteUser })[];
-		const remoteUsers = notes.map(({ user }) => user);
-		return remoteUsers;
-	}
-
-	@bindThis
-	private async deliverToConcerned(user: { id: MiLocalUser['id']; host: null; }, note: MiNote, content: any) {
+	private async deliverToConcerned(user: { id: MiLocalUser['id']; host: null; }, note: MiNote, content: IActivity): Promise<void> {
 		await this.apDeliverManagerService.deliverToFollowers(user, content);
-		await this.apDeliverManagerService.deliverToUsers(user, content, [
-			...await this.getMentionedRemoteUsers(note),
-			...await this.getRenotedOrRepliedRemoteUsers(note),
-		]);
+		await this.apDeliverManagerService.deliverToUsers(user, content, await this.getMentionedRemoteUsers(note));
 		await this.relayService.deliverToRelays(user, content);
+	}
+
+	@bindThis
+	private async updateChannelCounts(allNotes: MiNote[]): Promise<void> {
+		const channelNotesInBatch = allNotes.filter(n => n.channelId != null) as (MiNote & { channelId: string })[];
+		if (channelNotesInBatch.length < 1) return;
+
+		// Group batch by channelId => userId => noteCount
+		const channelsInBatch = new Set(channelNotesInBatch.map(n => n.channelId));
+		const usersInBatch = new Set(channelNotesInBatch.map(n => n.userId));
+		const channelUserNoteCountsBatch = new Map<string, CountingSet<string>>();
+		for (const note of channelNotesInBatch) {
+			let userNoteCounts = channelUserNoteCountsBatch.get(note.channelId);
+			if (!userNoteCounts) {
+				userNoteCounts = new CountingSet();
+				channelUserNoteCountsBatch.set(note.channelId, userNoteCounts);
+			}
+			userNoteCounts.add(note.userId);
+		}
+
+		const dbCounts = await this.notesRepository
+			.createQueryBuilder('note')
+			.select('note.channelId', 'channelId')
+			.addSelect('note.userId', 'userId')
+			.addSelect('count(note.id)', 'noteCount')
+			.where({
+				userId: IsOne(usersInBatch),
+				channelId: IsOne(channelsInBatch),
+			})
+			.groupBy('note.channelId')
+			.addGroupBy('note.userId')
+			.getRawMany<{ channelId: string, userId: string, noteCount: number }>();
+
+		// Organize bulk-data from DB
+		const channelUserNoteCountsDb = new Map<string, CountingSet<string>>();
+		for (const dbCount of dbCounts) {
+			let userNoteCounts = channelUserNoteCountsDb.get(dbCount.channelId);
+			if (!userNoteCounts) {
+				userNoteCounts = new CountingSet();
+				channelUserNoteCountsDb.set(dbCount.channelId, userNoteCounts);
+			}
+			userNoteCounts.add(dbCount.userId, dbCount.noteCount);
+		}
+
+		// Loop and update each channel
+		for (const channel of channelsInBatch) {
+			const noteUserCountsFromBatch = channelUserNoteCountsBatch.get(channel);
+			const noteUserCountsFromDb = channelUserNoteCountsDb.get(channel);
+
+			// Safety check; should never happen
+			if (!noteUserCountsFromBatch || !noteUserCountsFromDb) continue;
+
+			// Find number of notes being removed from this channel.
+			const notesRemovingFromChannel = noteUserCountsFromBatch.count();
+			const notesCountDelta = notesRemovingFromChannel > 0
+				? (0 - notesRemovingFromChannel)
+				: undefined;
+
+			// Find number of users being removed from this channel.
+			// (users are removed when all of their notes are removed)
+			const usersRemovingFromChannel = noteUserCountsFromBatch.entries().filter(entry => entry[1] >= noteUserCountsFromDb.count(entry[0])).map(entry => entry[0]).toArray().length;
+			const usersCountDelta = usersRemovingFromChannel > 0
+				? (0 - usersRemovingFromChannel)
+				: undefined;
+
+			// Queue it for bulk-update later
+			this.collapsedQueueService.updateChannelQueue.enqueue(channel, { notesCountDelta, usersCountDelta });
+		}
 	}
 }

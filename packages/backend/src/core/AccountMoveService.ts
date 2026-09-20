@@ -9,8 +9,9 @@ import { IsNull, In, MoreThan, Not } from 'typeorm';
 import { bindThis } from '@/decorators.js';
 import { DI } from '@/di-symbols.js';
 import type { MiLocalUser, MiRemoteUser, MiUser } from '@/models/User.js';
+import { isLocalUser } from '@/models/User.js';
 import type { BlockingsRepository, FollowingsRepository, InstancesRepository, MiMeta, MutingsRepository, UserListMembershipsRepository, UsersRepository, NoteScheduleRepository, MiNoteSchedule } from '@/models/_.js';
-import type { RelationshipJobData, ThinUser } from '@/queue/types.js';
+import type { Queues, RelationshipJobData, ThinUser } from '@/queue/types.js';
 
 import { IdService } from '@/core/IdService.js';
 import { GlobalEventService } from '@/core/GlobalEventService.js';
@@ -27,12 +28,28 @@ import { SystemAccountService } from '@/core/SystemAccountService.js';
 import { RoleService } from '@/core/RoleService.js';
 import { AntennaService } from '@/core/AntennaService.js';
 import { CacheService } from '@/core/CacheService.js';
+import { UserListService } from '@/core/UserListService.js';
+import { TimeService } from '@/global/TimeService.js';
+import { InternalEventService } from '@/global/InternalEventService.js';
+import { CollapsedQueueService } from '@/core/CollapsedQueueService.js';
+import { LoggerService } from '@/core/LoggerService.js';
+import { EnvService } from '@/global/EnvService.js';
+import type Logger from '@/logger.js';
+import { renderInlineError } from '@/misc/render-inline-error.js';
+import { IdentifiableError } from '@/misc/identifiable-error.js';
+import type { Packed } from '@/misc/json-schema.js';
+import type { Config } from '@/config.js';
 
 @Injectable()
 export class AccountMoveService {
+	private readonly logger: Logger;
+
 	constructor(
 		@Inject(DI.meta)
 		private meta: MiMeta,
+
+		@Inject(DI.config)
+		private readonly config: Config,
 
 		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
@@ -55,6 +72,9 @@ export class AccountMoveService {
 		@Inject(DI.noteScheduleRepository)
 		private noteScheduleRepository: NoteScheduleRepository,
 
+		@Inject('queue:scheduleNotePost')
+		private readonly scheduleNotePostQueue: Queues['scheduleNotePost'],
+
 		private userEntityService: UserEntityService,
 		private idService: IdService,
 		private apPersonService: ApPersonService,
@@ -70,7 +90,31 @@ export class AccountMoveService {
 		private roleService: RoleService,
 		private antennaService: AntennaService,
 		private readonly cacheService: CacheService,
+		private readonly userListService: UserListService,
+		private readonly timeService: TimeService,
+		private readonly internalEventService: InternalEventService,
+		private readonly loggerService: LoggerService,
+		private readonly envService: EnvService,
+		private readonly collapsedQueueService: CollapsedQueueService,
 	) {
+		this.logger = this.loggerService.getLogger('account-move');
+	}
+
+	@bindThis
+	public async restartMigration(src: MiUser): Promise<void> {
+		if (!src.movedToUri) {
+			throw new IdentifiableError('ddcf173a-00f2-4aa4-ba12-cddd131bacf4', `Can't restart migrated for user ${src.id}: user has not migrated`);
+		}
+
+		const dst = await this.apPersonService.resolvePerson(src.movedToUri);
+		this.logger.info(`Restarting migration from ${src.id} (@${src.usernameLower}@${src.host ?? this.config.host}) to ${dst.id} (@${dst.usernameLower}@${dst.host ?? this.config.host})`);
+
+		if (isLocalUser(src)) {
+			// This calls createMoveJob at the end
+			await this.moveFromLocal(src, dst);
+		} else {
+			await this.queueService.createMoveJob(src, dst);
+		}
 	}
 
 	/**
@@ -79,7 +123,7 @@ export class AccountMoveService {
 	 * After delivering Move activity, its local followers unfollow the old account and then follow the new one.
 	 */
 	@bindThis
-	public async moveFromLocal(src: MiLocalUser, dst: MiLocalUser | MiRemoteUser): Promise<unknown> {
+	public async moveFromLocal(src: MiLocalUser, dst: MiLocalUser | MiRemoteUser): Promise<Packed<'MeDetailed'>> {
 		const srcUri = this.userEntityService.getUserUri(src);
 		const dstUri = this.userEntityService.getUserUri(dst);
 
@@ -87,12 +131,12 @@ export class AccountMoveService {
 		const update = {} as Partial<MiLocalUser>;
 		update.alsoKnownAs = src.alsoKnownAs?.includes(dstUri) ? src.alsoKnownAs : src.alsoKnownAs?.concat([dstUri]) ?? [dstUri];
 		update.movedToUri = dstUri;
-		update.movedAt = new Date();
+		update.movedAt = this.timeService.date;
 		await this.usersRepository.update(src.id, update);
 		Object.assign(src, update);
 
 		// Update cache
-		this.globalEventService.publishInternalEvent('localUserUpdated', src);
+		await this.internalEventService.emit('localUserUpdated', { id: src.id });
 
 		const srcPerson = await this.apRendererService.renderPerson(src);
 		const updateAct = this.apRendererService.addContext(this.apRendererService.renderUpdate(srcPerson, src));
@@ -106,16 +150,18 @@ export class AccountMoveService {
 
 		// Publish meUpdated event
 		const iObj = await this.userEntityService.pack(src.id, src, { schema: 'MeDetailed', includeSecrets: true });
-		this.globalEventService.publishMainStream(src.id, 'meUpdated', iObj);
+		await this.globalEventService.publishMainStream(src.id, 'meUpdated', iObj);
 
 		// Unfollow after 24 hours
-		const followings = await this.cacheService.userFollowingsCache.fetch(src.id);
-		this.queueService.createDelayedUnfollowJob(Array.from(followings.keys()).map(followeeId => ({
+		const followings = await this.followingsRepository.findBy({
+			followerId: src.id,
+		});
+		await this.queueService.createDelayedUnfollowJob(followings.map(following => ({
 			from: { id: src.id },
-			to: { id: followeeId },
-		})), process.env.NODE_ENV === 'test' ? 10000 : 1000 * 60 * 60 * 24);
+			to: { id: following.followeeId },
+		})), this.envService.env.NODE_ENV === 'test' ? 10000 : 1000 * 60 * 60 * 24);
 
-		await this.postMoveProcess(src, dst);
+		await this.queueService.createMoveJob(src, dst);
 
 		return iObj;
 	}
@@ -123,55 +169,62 @@ export class AccountMoveService {
 	@bindThis
 	public async postMoveProcess(src: MiUser, dst: MiUser): Promise<void> {
 		// Copy blockings and mutings, and update lists
-		try {
-			await Promise.all([
-				this.copyBlocking(src, dst),
-				this.copyMutings(src, dst),
-				this.deleteScheduledNotes(src),
-				this.copyRoles(src, dst),
-				this.updateLists(src, dst),
-				this.antennaService.onMoveAccount(src, dst),
-			]);
-		} catch {
-			/* skip if any error happens */
-		}
+		await this.copyBlocking(src, dst)
+			.catch(err => this.logger.warn(`Error copying blockings in migration ${src.id} (@${src.usernameLower}@${src.host ?? this.config.host}) to ${dst.id} (@${dst.usernameLower}@${dst.host ?? this.config.host}): ${renderInlineError(err)}`));
+		await this.copyMutings(src, dst)
+			.catch(err => this.logger.warn(`Error copying mutings in migration ${src.id} (@${src.usernameLower}@${src.host ?? this.config.host}) to ${dst.id} (@${dst.usernameLower}@${dst.host ?? this.config.host}): ${renderInlineError(err)}`));
+		await this.deleteScheduledNotes(src)
+			.catch(err => this.logger.warn(`Error deleting scheduled notes in migration ${src.id} (@${src.usernameLower}@${src.host ?? this.config.host}) to ${dst.id} (@${dst.usernameLower}@${dst.host ?? this.config.host}): ${renderInlineError(err)}`));
+		await this.copyRoles(src, dst)
+			.catch(err => this.logger.warn(`Error copying roles in migration ${src.id} (@${src.usernameLower}@${src.host ?? this.config.host}) to ${dst.id} (@${dst.usernameLower}@${dst.host ?? this.config.host}): ${renderInlineError(err)}`));
+		await this.updateLists(src, dst)
+			.catch(err => this.logger.warn(`Error updating lists in migration ${src.id} (@${src.usernameLower}@${src.host ?? this.config.host}) to ${dst.id} (@${dst.usernameLower}@${dst.host ?? this.config.host}): ${renderInlineError(err)}`));
+		await this.antennaService.onMoveAccount(src, dst)
+			.catch(err => this.logger.warn(`Error updating antennas in migration ${src.id} (@${src.usernameLower}@${src.host ?? this.config.host}) to ${dst.id} (@${dst.usernameLower}@${dst.host ?? this.config.host}): ${renderInlineError(err)}`));
 
 		// follow the new account
 		const proxy = await this.systemAccountService.fetch('proxy');
-		const followings = await this.cacheService.userFollowersCache.fetch(src.id)
-			.then(fs => Array.from(fs.values())
-				.filter(f => f.followerHost == null && f.followerId !== proxy.id));
+		const followings = await this.followingsRepository.findBy({
+			followeeId: src.id,
+			followerHost: IsNull(), // follower is local
+			followerId: Not(proxy.id),
+		});
 		const followJobs = followings.map(following => ({
 			from: { id: following.followerId },
 			to: { id: dst.id },
+			withReplies: following.withReplies,
 		})) as RelationshipJobData[];
 
 		// Decrease following count instead of unfollowing.
 		try {
 			await this.adjustFollowingCounts(followJobs.map(job => job.from.id), src);
-		} catch {
+		} catch (err) {
 			/* skip if any error happens */
+			this.logger.warn(`Non-fatal exception in migration from ${src.id} (@${src.usernameLower}@${src.host ?? this.config.host}) to ${dst.id} (@${dst.usernameLower}@${dst.host ?? this.config.host}): ${renderInlineError(err)}`);
 		}
 
 		// Should be queued because this can cause a number of follow per one move.
-		this.queueService.createFollowJob(followJobs);
+		await this.queueService.createFollowJob(followJobs);
 	}
 
 	@bindThis
 	public async copyBlocking(src: ThinUser, dst: ThinUser): Promise<void> {
 		// Followers shouldn't overlap with blockers, but the destination account, different from the blockee (i.e., old account), may have followed the local user before moving.
 		// So block the destination account here.
-		const srcBlockings = await this.blockingsRepository.findBy({ blockeeId: src.id });
-		const dstBlockings = await this.blockingsRepository.findBy({ blockeeId: dst.id });
-		const blockerIds = dstBlockings.map(blocking => blocking.blockerId);
+		const [srcBlockers, dstBlockers, dstFollowers] = await Promise.all([
+			this.blockingsRepository.find({ where: { blockeeId: src.id }, select: { blockerId: true } }).then(bs => new Set(bs.map(f => f.blockerId))),
+			this.blockingsRepository.find({ where: { blockeeId: dst.id }, select: { blockerId: true } }).then(bs => new Set(bs.map(f => f.blockerId))),
+			this.followingsRepository.find({ where: { followeeId: dst.id }, select: { followerId: true } }).then(fs => new Set(fs.map(f => f.followerId))),
+		]);
 		// reblock the destination account
-		const blockJobs: RelationshipJobData[] = [];
-		for (const blocking of srcBlockings) {
-			if (blockerIds.includes(blocking.blockerId)) continue; // skip if already blocked
-			blockJobs.push({ from: { id: blocking.blockerId }, to: { id: dst.id } });
+		const blockJobs: Omit<RelationshipJobData, 'type'>[] = [];
+		for (const blockerId of srcBlockers) {
+			if (dstBlockers.has(blockerId)) continue; // skip if already blocked
+			if (dstFollowers.has(blockerId)) continue; // skip if already following
+			blockJobs.push({ from: { id: blockerId }, to: { id: dst.id } });
 		}
 		// no need to unblock the old account because it may be still functional
-		this.queueService.createBlockJob(blockJobs);
+		await this.queueService.createBlockJob(blockJobs);
 	}
 
 	@bindThis
@@ -179,14 +232,18 @@ export class AccountMoveService {
 		// Insert new mutings with the same values except mutee
 		const oldMutings = await this.mutingsRepository.findBy([
 			{ muteeId: src.id, expiresAt: IsNull() },
-			{ muteeId: src.id, expiresAt: MoreThan(new Date()) },
+			{ muteeId: src.id, expiresAt: MoreThan(this.timeService.date) },
 		]);
 		if (oldMutings.length === 0) return;
 
 		// Check if the destination account is already indefinitely muted by the muter
-		const existingMutingsMuterUserIds = await this.mutingsRepository.findBy(
-			{ muteeId: dst.id, expiresAt: IsNull() },
-		).then(mutings => mutings.map(muting => muting.muterId));
+		const [existingMutingsMuterUserIds, dstFollowers] = await Promise.all([
+			this.mutingsRepository.findBy(
+				{ muteeId: dst.id, expiresAt: IsNull() },
+			).then(mutings => mutings.map(muting => muting.muterId)),
+			this.followingsRepository.find({ where: { followeeId: dst.id }, select: { followerId: true } })
+				.then(fs => new Set(fs.map(f => f.followerId))),
+		]);
 
 		const newMutings: Map<string, { muterId: string; muteeId: string; expiresAt: Date | null; }> = new Map();
 
@@ -200,6 +257,7 @@ export class AccountMoveService {
 		};
 		for (const muting of oldMutings) {
 			if (existingMutingsMuterUserIds.includes(muting.muterId)) continue; // skip if already muted indefinitely
+			if (dstFollowers.has(muting.muterId)) continue; // skip if already following
 			newMutings.set(genId(), {
 				...muting,
 				muteeId: dst.id,
@@ -217,7 +275,9 @@ export class AccountMoveService {
 		}) as MiNoteSchedule[];
 
 		for (const note of scheduledNotes) {
-			await this.queueService.ScheduleNotePostQueue.remove(`schedNote:${note.id}`);
+			await this.scheduleNotePostQueue.remove(`schedNote_${note.id}`);
+			// this is for notes scheduled with 2025.4 or earlier
+			await this.scheduleNotePostQueue.remove(`schedNote:${note.id}`).catch(() => null);
 		}
 
 		await this.noteScheduleRepository.delete({
@@ -263,45 +323,35 @@ export class AccountMoveService {
 	@bindThis
 	public async updateLists(src: ThinUser, dst: MiUser): Promise<void> {
 		// Return if there is no list to be updated.
-		const oldMemberships = await this.userListMembershipsRepository.find({
-			where: {
-				userId: src.id,
-			},
-		});
-		if (oldMemberships.length === 0) return;
+		const [srcMemberships, dstMemberships] = await Promise.all([
+			this.cacheService.userListMembershipsCache.fetch(src.id),
+			this.cacheService.userListMembershipsCache.fetch(dst.id),
+		]);
+		if (srcMemberships.size === 0) return;
 
-		const existingUserListIds = await this.userListMembershipsRepository.find({
-			where: {
-				userId: dst.id,
-			},
-		}).then(memberships => memberships.map(membership => membership.userListId));
+		const newMemberships = srcMemberships.values()
+			.filter(srcMembership => !dstMemberships.has(srcMembership.userListId))
+			.map(srcMembership => ({
+				userListId: srcMembership.userListId,
+				withReplies: srcMembership.withReplies,
+			}))
+			.toArray();
+		const updatedMemberships = srcMemberships.values()
+			.filter(srcMembership => {
+				const dstMembership = dstMemberships.get(srcMembership.userListId);
+				return dstMembership != null && dstMembership.withReplies !== srcMembership.withReplies;
+			})
+			.map(srcMembership => ({
+				userListId: srcMembership.userListId,
+				withReplies: srcMembership.withReplies,
+			}))
+			.toArray();
 
-		const newMemberships: Map<string, { userId: string; userListId: string; userListUserId: string; }> = new Map();
-
-		// 重複しないようにIDを生成
-		const genId = (): string => {
-			let id: string;
-			do {
-				id = this.idService.gen();
-			} while (newMemberships.has(id));
-			return id;
-		};
-		for (const membership of oldMemberships) {
-			if (existingUserListIds.includes(membership.userListId)) continue; // skip if dst exists in this user's list
-			newMemberships.set(genId(), {
-				userId: dst.id,
-				userListId: membership.userListId,
-				userListUserId: membership.userListUserId,
-			});
+		if (newMemberships.length > 0) {
+			await this.userListService.bulkAddMember(dst, newMemberships);
 		}
-
-		const arrayToInsert = Array.from(newMemberships.entries()).map(entry => ({ ...entry[1], id: entry[0] }));
-		await this.userListMembershipsRepository.insert(arrayToInsert);
-
-		// Have the proxy account follow the new account in the same way as UserListService.push
-		if (this.userEntityService.isRemoteUser(dst)) {
-			const proxy = await this.systemAccountService.fetch('proxy');
-			this.queueService.createFollowJob([{ from: { id: proxy.id }, to: { id: dst.id } }]);
+		if (updatedMemberships.length > 0) {
+			await this.userListService.bulkUpdateMembership(dst, updatedMemberships);
 		}
 	}
 
@@ -310,26 +360,31 @@ export class AccountMoveService {
 		if (localFollowerIds.length === 0) return;
 
 		// Set the old account's following and followers counts to 0.
+		await this.collapsedQueueService.updateUserQueue.performNow(oldAccount.id);
 		await this.usersRepository.update({ id: oldAccount.id }, { followersCount: 0, followingCount: 0 });
+		await this.internalEventService.emit('userUpdated', { id: oldAccount.id });
 
 		// Decrease following counts of local followers by 1.
-		await this.usersRepository.decrement({ id: In(localFollowerIds) }, 'followingCount', 1);
+		for (const followerId of localFollowerIds) {
+			this.collapsedQueueService.updateUserQueue.enqueue(followerId, { followingCountDelta: -1 });
+		}
 
 		// Decrease follower counts of local followees by 1.
-		const oldFollowings = await this.cacheService.userFollowingsCache.fetch(oldAccount.id);
-		if (oldFollowings.size > 0) {
-			await this.usersRepository.decrement({ id: In(Array.from(oldFollowings.keys())) }, 'followersCount', 1);
+		const oldFollowings = await this.followingsRepository.find({ where: { followerId: oldAccount.id }, select: { followeeId: true } });
+		const oldFolloweeIds = oldFollowings.map(f => f.followeeId);
+		for (const followeeId of oldFolloweeIds) {
+			this.collapsedQueueService.updateUserQueue.enqueue(followeeId, { followersCountDelta: -1 });
 		}
 
 		// Update instance stats by decreasing remote followers count by the number of local followers who were following the old account.
 		if (this.meta.enableStatsForFederatedInstances) {
 			if (this.userEntityService.isRemoteUser(oldAccount)) {
-				this.federatedInstanceService.fetchOrRegister(oldAccount.host).then(async i => {
-					this.instancesRepository.decrement({ id: i.id }, 'followersCount', localFollowerIds.length);
+				{
+					this.collapsedQueueService.updateInstanceQueue.enqueue(oldAccount.host, { followersCountDelta: 0 - localFollowerIds.length });
 					if (this.meta.enableChartsForFederatedInstances) {
-						this.instanceChart.updateFollowers(i.host, false);
+						this.instanceChart.updateFollowers(oldAccount.host, false);
 					}
-				});
+				}
 			}
 		}
 
@@ -349,14 +404,14 @@ export class AccountMoveService {
 	 */
 	@bindThis
 	public async validateAlsoKnownAs(
-		dst: MiLocalUser | MiRemoteUser,
+		dst: MiLocalUser | MiRemoteUser | MiUser,
 		check: (oldUser: MiLocalUser | MiRemoteUser | null, newUser: MiLocalUser | MiRemoteUser) => boolean | Promise<boolean> = () => true,
 		instant = false,
 	): Promise<MiLocalUser | MiRemoteUser | null> {
 		let resultUser: MiLocalUser | MiRemoteUser | null = null;
 
 		if (this.userEntityService.isRemoteUser(dst)) {
-			if (Date.now() - (dst.lastFetchedAt?.getTime() ?? 0) > 10 * 1000) {
+			if (this.timeService.now - (dst.lastFetchedAt?.getTime() ?? 0) > 10 * 1000) {
 				await this.apPersonService.updatePerson(dst.uri);
 			}
 			dst = await this.apPersonService.fetchPerson(dst.uri) ?? dst;
@@ -372,7 +427,7 @@ export class AccountMoveService {
 				if (!src) continue; // oldAccountを探してもこのサーバーに存在しない場合はフォロー関係もないということなのでスルー
 
 				if (this.userEntityService.isRemoteUser(dst)) {
-					if (Date.now() - (src.lastFetchedAt?.getTime() ?? 0) > 10 * 1000) {
+					if (this.timeService.now - (src.lastFetchedAt?.getTime() ?? 0) > 10 * 1000) {
 						await this.apPersonService.updatePerson(srcUri);
 					}
 

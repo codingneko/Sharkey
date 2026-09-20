@@ -14,6 +14,7 @@ import { SystemAccountService } from '@/core/SystemAccountService.js';
 import type { Config } from '@/config.js';
 import { DI } from '@/di-symbols.js';
 import { DEFAULT_POLICIES } from '@/core/RoleService.js';
+import { TimeService } from '@/global/TimeService.js';
 
 @Injectable()
 export class MetaEntityService {
@@ -28,6 +29,7 @@ export class MetaEntityService {
 		private adsRepository: AdsRepository,
 
 		private systemAccountService: SystemAccountService,
+		private readonly timeService: TimeService,
 	) { }
 
 	@bindThis
@@ -38,19 +40,20 @@ export class MetaEntityService {
 			instance = this.meta;
 		}
 
+		// TODO quantum-cache for ads
 		const ads = await this.adsRepository.createQueryBuilder('ads')
-			.where('ads.expiresAt > :now', { now: new Date() })
-			.andWhere('ads.startsAt <= :now', { now: new Date() })
+			.where('ads.expiresAt > :now', { now: this.timeService.date })
+			.andWhere('ads.startsAt <= :now', { now: this.timeService.date })
 			.andWhere(new Brackets(qb => {
 				// 曜日のビットフラグを確認する
-				qb.where('ads.dayOfWeek & :dayOfWeek > 0', { dayOfWeek: 1 << new Date().getDay() })
+				qb.where('ads.dayOfWeek & :dayOfWeek > 0', { dayOfWeek: 1 << this.timeService.date.getDay() })
 					.orWhere('ads.dayOfWeek = 0');
 			}))
 			.getMany();
 
 		// クライアントの手間を減らすためあらかじめJSONに変換しておく
-		let defaultLightTheme = null;
-		let defaultDarkTheme = null;
+		let defaultLightTheme: string | null = null;
+		let defaultDarkTheme: string | null = null;
 		if (instance.defaultLightTheme) {
 			try {
 				defaultLightTheme = JSON.stringify(JSON5.parse(instance.defaultLightTheme));
@@ -75,6 +78,7 @@ export class MetaEntityService {
 			shortName: instance.shortName,
 			uri: this.config.url,
 			description: instance.description,
+			about: instance.about,
 			langs: instance.langs,
 			tosUrl: instance.termsOfServiceUrl,
 			repositoryUrl: instance.repositoryUrl,
@@ -117,6 +121,8 @@ export class MetaEntityService {
 			maxRemoteCwLength: this.config.maxRemoteCwLength,
 			maxAltTextLength: this.config.maxAltTextLength,
 			maxRemoteAltTextLength: this.config.maxRemoteAltTextLength,
+			maxBioLength: this.config.maxBioLength,
+			maxRemoteBioLength: this.config.maxRemoteBioLength,
 			defaultLightTheme,
 			defaultDarkTheme,
 			defaultLike: instance.defaultLike,
@@ -158,9 +164,10 @@ export class MetaEntityService {
 			instance = this.meta;
 		}
 
-		const packed = await this.pack(instance);
-
-		const proxyAccount = await this.systemAccountService.fetch('proxy');
+		const [packed, proxyAccount] = await Promise.all([
+			this.pack(instance),
+			this.systemAccountService.fetch('proxy'),
+		]);
 
 		const packDetailed: Packed<'MetaDetailed'> = {
 			...packed,

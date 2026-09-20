@@ -4,10 +4,9 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import * as argon2 from 'argon2';
 import { IsNull } from 'typeorm';
 import { DI } from '@/di-symbols.js';
-import type { RegistrationTicketsRepository, UsedUsernamesRepository, UserPendingsRepository, UserProfilesRepository, UsersRepository, MiRegistrationTicket, MiMeta } from '@/models/_.js';
+import type { RegistrationTicketsRepository, UsedUsernamesRepository, UserPendingsRepository, UserProfilesRepository, UsersRepository, MiRegistrationTicket, MiMeta, UserIpsRepository } from '@/models/_.js';
 import type { Config } from '@/config.js';
 import { CaptchaService } from '@/core/CaptchaService.js';
 import { IdService } from '@/core/IdService.js';
@@ -19,11 +18,18 @@ import { FastifyReplyError } from '@/misc/fastify-reply-error.js';
 import { bindThis } from '@/decorators.js';
 import { L_CHARS, secureRndstr } from '@/misc/secure-rndstr.js';
 import { RoleService } from '@/core/RoleService.js';
+import Logger from '@/logger.js';
+import { LoggerService } from '@/core/LoggerService.js';
+import { InternalEventService } from '@/global/InternalEventService.js';
+import { UserAuthService } from '@/core/UserAuthService.js';
+import { TimeService } from '@/global/TimeService.js';
+import { EnvService } from '@/global/EnvService.js';
 import { SigninService } from './SigninService.js';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 
 @Injectable()
 export class SignupApiService {
+	private logger: Logger;
 	constructor(
 		@Inject(DI.config)
 		private config: Config,
@@ -46,6 +52,9 @@ export class SignupApiService {
 		@Inject(DI.registrationTicketsRepository)
 		private registrationTicketsRepository: RegistrationTicketsRepository,
 
+		@Inject(DI.userIpsRepository)
+		private userIpsRepository: UserIpsRepository,
+
 		private userEntityService: UserEntityService,
 		private idService: IdService,
 		private captchaService: CaptchaService,
@@ -53,7 +62,13 @@ export class SignupApiService {
 		private signinService: SigninService,
 		private emailService: EmailService,
 		private roleService: RoleService,
+		private loggerService: LoggerService,
+		private readonly timeService: TimeService,
+		private readonly envService: EnvService,
+		private readonly internalEventService: InternalEventService,
+		private readonly userAuthService: UserAuthService,
 	) {
+		this.logger = this.loggerService.getLogger('Signup');
 	}
 
 	@bindThis
@@ -80,7 +95,7 @@ export class SignupApiService {
 
 		// Verify *Captcha
 		// ただしテスト時はこの機構は障害となるため無効にする
-		if (process.env.NODE_ENV !== 'test') {
+		if (this.envService.env.NODE_ENV !== 'test') {
 			if (this.meta.enableHcaptcha && this.meta.hcaptchaSecretKey) {
 				await this.captchaService.verifyHcaptcha(this.meta.hcaptchaSecretKey, body['hcaptcha-response']).catch(err => {
 					throw new FastifyReplyError(400, String(err), err);
@@ -120,7 +135,7 @@ export class SignupApiService {
 
 		const username = body['username'];
 		const password = body['password'];
-		const host: string | null = process.env.NODE_ENV === 'test' ? (body['host'] ?? null) : null;
+		const host: string | null = this.envService.env.NODE_ENV === 'test' ? (body['host'] ?? null) : null;
 		const invitationCode = body['invitationCode'];
 		const reason = body['reason'];
 		const emailAddress = body['emailAddress'];
@@ -147,7 +162,7 @@ export class SignupApiService {
 
 		let ticket: MiRegistrationTicket | null = null;
 
-		if (this.meta.disableRegistration) {
+		if (this.meta.disableRegistration && this.envService.env.NODE_ENV !== 'test') {
 			if (invitationCode == null || typeof invitationCode !== 'string') {
 				reply.code(400);
 				return;
@@ -162,7 +177,7 @@ export class SignupApiService {
 				return;
 			}
 
-			if (ticket.expiresAt && ticket.expiresAt < new Date()) {
+			if (ticket.expiresAt && ticket.expiresAt < this.timeService.date) {
 				reply.code(400);
 				return;
 			}
@@ -176,7 +191,7 @@ export class SignupApiService {
 				}
 
 				// 認証しておらず、メール送信から30分以内ならエラー
-				if (ticket.usedAt && ticket.usedAt.getTime() + (1000 * 60 * 30) > Date.now()) {
+				if (ticket.usedAt && ticket.usedAt.getTime() + (1000 * 60 * 30) > this.timeService.now) {
 					reply.code(400);
 					return;
 				}
@@ -204,7 +219,7 @@ export class SignupApiService {
 			const code = secureRndstr(16, { chars: L_CHARS });
 
 			// Generate hash of password
-			const hash = await argon2.hash(password);
+			const hash = await this.userAuthService.hashPassword(password);
 
 			const pendingUser = await this.userPendingsRepository.insertOne({
 				id: this.idService.gen(),
@@ -213,6 +228,7 @@ export class SignupApiService {
 				username: username,
 				password: hash,
 				reason: reason,
+				requestOriginIp: this.meta.enableIpLogging ? request.ip : null,
 			});
 
 			const link = `${this.config.url}/signup-complete/${code}`;
@@ -223,7 +239,7 @@ export class SignupApiService {
 
 			if (ticket) {
 				await this.registrationTicketsRepository.update(ticket.id, {
-					usedAt: new Date(),
+					usedAt: this.timeService.date,
 					pendingUserId: pendingUser.id,
 				});
 			}
@@ -243,10 +259,14 @@ export class SignupApiService {
 
 			if (ticket) {
 				await this.registrationTicketsRepository.update(ticket.id, {
-					usedAt: new Date(),
+					usedAt: this.timeService.date,
 					usedBy: account,
 					usedById: account.id,
 				});
+			}
+
+			if (this.meta.enableIpLogging) {
+				this.logIp(request.ip, null, account.id);
 			}
 
 			const moderators = await this.roleService.getModerators();
@@ -276,10 +296,14 @@ export class SignupApiService {
 
 				if (ticket) {
 					await this.registrationTicketsRepository.update(ticket.id, {
-						usedAt: new Date(),
+						usedAt: this.timeService.date,
 						usedBy: account,
 						usedById: account.id,
 					});
+				}
+
+				if (this.meta.enableIpLogging) {
+					this.logIp(request.ip, null, account.id);
 				}
 
 				return {
@@ -301,7 +325,7 @@ export class SignupApiService {
 		try {
 			const pendingUser = await this.userPendingsRepository.findOneByOrFail({ code });
 
-			if (this.idService.parse(pendingUser.id).date.getTime() + (1000 * 60 * 30) < Date.now()) {
+			if (this.idService.parse(pendingUser.id).date.getTime() + (1000 * 60 * 30) < this.timeService.now) {
 				throw new FastifyReplyError(400, 'EXPIRED');
 			}
 
@@ -322,6 +346,7 @@ export class SignupApiService {
 				emailVerified: true,
 				emailVerifyCode: null,
 			});
+			await this.internalEventService.emit('updateUserProfile', { userId: profile.userId, keys: ['email', 'emailVerified', 'emailVerifyCode'] });
 
 			const ticket = await this.registrationTicketsRepository.findOneBy({ pendingUserId: pendingUser.id });
 			if (ticket) {
@@ -330,6 +355,15 @@ export class SignupApiService {
 					usedById: account.id,
 					pendingUserId: null,
 				});
+			}
+
+			if (pendingUser.requestOriginIp) {
+				this.logIp(pendingUser.requestOriginIp, this.idService.parse(pendingUser.id).date, account.id);
+			}
+
+			// The sign-up request and the confirmation may've come from different addresses: log both
+			if (this.meta.enableIpLogging) {
+				this.logIp(request.ip, null, account.id);
 			}
 
 			if (this.meta.approvalRequiredForSignup) {
@@ -357,6 +391,19 @@ export class SignupApiService {
 			return this.signinService.signin(request, reply, account as MiLocalUser);
 		} catch (err) {
 			throw new FastifyReplyError(400, String(err), err);
+		}
+	}
+
+	@bindThis
+	private logIp(ip: string, ipDate: Date | null, userId: MiLocalUser['id']) {
+		try {
+			this.userIpsRepository.createQueryBuilder().insert().values({
+				createdAt: ipDate ?? this.timeService.date,
+				userId,
+				ip,
+			}).orIgnore(true).execute();
+		} catch (err) {
+			this.logger.error(err as Error);
 		}
 	}
 }

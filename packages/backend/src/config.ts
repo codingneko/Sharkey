@@ -7,13 +7,19 @@ import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import * as yaml from 'js-yaml';
-import { globSync } from 'glob';
+import fastGlob from 'fast-glob';
 import ipaddr from 'ipaddr.js';
-import Logger from './logger.js';
+import { coreLogger } from '@/boot/coreLogger.js';
+import { QUEUE_TYPES } from '@/queue/const.js';
+import type { QueueType } from '@/queue/types.js';
+import type { UnionToIntersection } from '@/types.js';
+import type { Logger } from './logger.js';
 import type * as Sentry from '@sentry/node';
 import type * as SentryVue from '@sentry/vue';
 import type { RedisOptions } from 'ioredis';
 import type { IPv4, IPv6 } from 'ipaddr.js';
+
+/* eslint-disable no-restricted-properties */
 
 type RedisOptionsSource = Partial<RedisOptions> & {
 	host?: string;
@@ -25,10 +31,23 @@ type RedisOptionsSource = Partial<RedisOptions> & {
 	prefix?: string;
 };
 
+const QUEUE_FIELDS = ['JobConcurrency', 'JobPerSec', 'JobMaxAttempts'] as const;
+type QueueField = typeof QUEUE_FIELDS[number];
+
+type QueueConfigUnion = {
+	[Q in QueueType]: {
+		[F in `${Q}${QueueField}`]: number;
+	};
+}[QueueType];
+type QueueConfigIntersection = UnionToIntersection<QueueConfigUnion>;
+type QueueConfig = {
+	[K in keyof QueueConfigIntersection]: QueueConfigIntersection[K] | null;
+};
+
 /**
  * 設定ファイルの型
  */
-type Source = {
+type Source = Partial<QueueConfig> & {
 	url?: string;
 	port?: number;
 	address?: string;
@@ -96,6 +115,9 @@ type Source = {
 	maxRemoteNoteLength?: number;
 	maxAltTextLength?: number;
 	maxRemoteAltTextLength?: number;
+	maxBioLength?: number;
+	maxRemoteBioLength?: number;
+	maxDialogAnnouncements?: number;
 
 	clusterLimit?: number;
 
@@ -104,14 +126,10 @@ type Source = {
 	outgoingAddress?: string;
 	outgoingAddressFamily?: 'ipv4' | 'ipv6' | 'dual';
 
-	deliverJobConcurrency?: number;
-	inboxJobConcurrency?: number;
-	relationshipJobConcurrency?: number;
-	deliverJobPerSec?: number;
-	inboxJobPerSec?: number;
-	relationshipJobPerSec?: number;
-	deliverJobMaxAttempts?: number;
-	inboxJobMaxAttempts?: number;
+	// Alias for legacy config keys
+	backgroundJobConcurrency?: number;
+	backgroundJobPerSec?: number;
+	backgroundJobMaxAttempts?: number;
 
 	mediaDirectory?: string;
 	mediaProxy?: string;
@@ -143,7 +161,6 @@ type Source = {
 			disableQueryTruncation?: boolean,
 			enableQueryParamLogging?: boolean,
 		};
-		verbose?: boolean;
 	}
 
 	activityLogging?: {
@@ -158,8 +175,6 @@ type Source = {
 		head?: string;
 	}
 };
-
-const configLogger = new Logger('config');
 
 export type PrivateNetworkSource = string | { network?: string, ports?: number[] };
 
@@ -179,10 +194,10 @@ export type PrivateNetwork = {
 
 export type CIDR = [ip: IPv4 | IPv6, prefixLength: number];
 
-export function parsePrivateNetworks(patterns: PrivateNetworkSource[]): PrivateNetwork[];
-export function parsePrivateNetworks(patterns: undefined): undefined;
-export function parsePrivateNetworks(patterns: PrivateNetworkSource[] | undefined): PrivateNetwork[] | undefined;
-export function parsePrivateNetworks(patterns: PrivateNetworkSource[] | undefined): PrivateNetwork[] | undefined {
+export function parsePrivateNetworks(patterns: PrivateNetworkSource[], configLogger: Logger): PrivateNetwork[];
+export function parsePrivateNetworks(patterns: undefined, configLogger: Logger): undefined;
+export function parsePrivateNetworks(patterns: PrivateNetworkSource[] | undefined, configLogger: Logger): PrivateNetwork[] | undefined;
+export function parsePrivateNetworks(patterns: PrivateNetworkSource[] | undefined, configLogger: Logger): PrivateNetwork[] | undefined {
 	if (!patterns) return undefined;
 	return patterns
 		.map(e => {
@@ -215,7 +230,7 @@ function parseIpOrMask(ipOrMask: string): CIDR | null {
 	return null;
 }
 
-export type Config = {
+export type Config = QueueConfig & {
 	url: string;
 	port: number;
 	address: string;
@@ -263,18 +278,13 @@ export type Config = {
 	maxRemoteCwLength: number;
 	maxAltTextLength: number;
 	maxRemoteAltTextLength: number;
+	maxBioLength: number;
+	maxRemoteBioLength: number;
+	maxDialogAnnouncements: number;
 	clusterLimit: number | undefined;
 	id: string;
 	outgoingAddress: string | undefined;
 	outgoingAddressFamily: 'ipv4' | 'ipv6' | 'dual' | undefined;
-	deliverJobConcurrency: number | undefined;
-	inboxJobConcurrency: number | undefined;
-	relationshipJobConcurrency: number | undefined;
-	deliverJobPerSec: number | undefined;
-	inboxJobPerSec: number | undefined;
-	relationshipJobPerSec: number | undefined;
-	deliverJobMaxAttempts: number | undefined;
-	inboxJobMaxAttempts: number | undefined;
 	proxyRemoteFiles: boolean | undefined;
 	customMOTD: string[] | undefined;
 	logLevel: string | undefined;
@@ -287,7 +297,6 @@ export type Config = {
 			disableQueryTruncation?: boolean,
 			enableQueryParamLogging?: boolean,
 		};
-		verbose?: boolean;
 	}
 
 	version: string;
@@ -356,18 +365,17 @@ const _dirname = dirname(_filename);
 /**
  * Path of configuration directory
  */
-const dir = process.env.MISSKEY_CONFIG_DIR ?? `${_dirname}/../../../.config`;
+const dir = resolve(process.env.MISSKEY_CONFIG_DIR ?? `${_dirname}/../../../.config`);
 
 /**
  * Path of configuration file
  */
-const path = process.env.MISSKEY_CONFIG_YML
-	? resolve(dir, process.env.MISSKEY_CONFIG_YML)
-	: process.env.NODE_ENV === 'test'
-		? resolve(dir, 'test.yml')
-		: resolve(dir, 'default.yml');
+const path = process.env.MISSKEY_CONFIG_YML ?? (process.env.NODE_ENV === 'test' ? 'test.yml' : 'default.yml');
 
-export function loadConfig(): Config {
+export function loadConfig(logger?: Logger): Config {
+	logger ??= coreLogger;
+	const configLogger = logger.createSubLogger('config');
+
 	const meta = JSON.parse(fs.readFileSync(`${_dirname}/../../../built/meta.json`, 'utf-8'));
 
 	const frontendManifestExists = fs.existsSync(_dirname + '/../../../built/_frontend_vite_/manifest.json');
@@ -379,7 +387,7 @@ export function loadConfig(): Config {
 		JSON.parse(fs.readFileSync(`${_dirname}/../../../built/_frontend_embed_vite_/manifest.json`, 'utf-8'))
 		: { 'src/boot.ts': { file: 'src/boot.ts' } };
 
-	const configFiles = globSync(path).sort();
+	const configFiles = fastGlob.globSync(path, { cwd: dir, absolute: true }).sort();
 
 	if (configFiles.length === 0
 			&& !process.env['MK_WARNED_ABOUT_CONFIG']) {
@@ -400,7 +408,7 @@ export function loadConfig(): Config {
 	applyEnvOverrides(config);
 
 	const url = tryCreateUrl(config.url ?? process.env.MISSKEY_URL ?? '');
-	const version = meta.version;
+	const version = meta.gitVersion ?? meta.version;
 	const host = url.host;
 	const hostname = url.hostname;
 	const scheme = url.protocol.replace(/:$/, '');
@@ -419,6 +427,14 @@ export function loadConfig(): Config {
 	// nullish => 300 (default)
 	// 0 => undefined (disabled)
 	const slowQueryThreshold = (config.db.slowQueryThreshold ?? 300) || undefined;
+
+	const queueConfig = {} as QueueConfig;
+	for (const queue of QUEUE_TYPES) {
+		for (const field of QUEUE_FIELDS) {
+			const key = `${queue}${field}`;
+			queueConfig[key] = config[key] ?? null;
+		}
+	}
 
 	return {
 		version,
@@ -455,7 +471,7 @@ export function loadConfig(): Config {
 		proxy: config.proxy,
 		proxySmtp: config.proxySmtp,
 		proxyBypassHosts: config.proxyBypassHosts,
-		allowedPrivateNetworks: parsePrivateNetworks(config.allowedPrivateNetworks),
+		allowedPrivateNetworks: parsePrivateNetworks(config.allowedPrivateNetworks, configLogger),
 		disallowExternalApRedirect: config.disallowExternalApRedirect ?? false,
 		maxFileSize: config.maxFileSize ?? 262144000,
 		maxNoteLength: config.maxNoteLength ?? 3000,
@@ -464,17 +480,18 @@ export function loadConfig(): Config {
 		maxRemoteCwLength: config.maxRemoteCwLength ?? 5000,
 		maxAltTextLength: config.maxAltTextLength ?? 20000,
 		maxRemoteAltTextLength: config.maxRemoteAltTextLength ?? 100000,
+		maxBioLength: config.maxBioLength ?? 1500,
+		maxRemoteBioLength: config.maxRemoteBioLength ?? 15000,
+		maxDialogAnnouncements: config.maxDialogAnnouncements ?? 5,
 		clusterLimit: config.clusterLimit,
 		outgoingAddress: config.outgoingAddress,
 		outgoingAddressFamily: config.outgoingAddressFamily,
-		deliverJobConcurrency: config.deliverJobConcurrency,
-		inboxJobConcurrency: config.inboxJobConcurrency,
-		relationshipJobConcurrency: config.relationshipJobConcurrency,
-		deliverJobPerSec: config.deliverJobPerSec,
-		inboxJobPerSec: config.inboxJobPerSec,
-		relationshipJobPerSec: config.relationshipJobPerSec,
-		deliverJobMaxAttempts: config.deliverJobMaxAttempts,
-		inboxJobMaxAttempts: config.inboxJobMaxAttempts,
+		// Correct queue config
+		...queueConfig,
+		// Legacy queue config
+		backgroundTaskJobConcurrency: queueConfig.backgroundTaskJobConcurrency ?? config.backgroundJobConcurrency ?? null,
+		backgroundTaskJobPerSec: queueConfig.backgroundTaskJobPerSec ?? config.backgroundJobPerSec ?? null,
+		backgroundTaskJobMaxAttempts: queueConfig.backgroundTaskJobMaxAttempts ?? config.backgroundJobMaxAttempts ?? null,
 		proxyRemoteFiles: config.proxyRemoteFiles,
 		customMOTD: config.customMOTD,
 		logLevel: config.logLevel,
@@ -662,11 +679,10 @@ function applyEnvOverrides(config: Source) {
 	_apply_top(['sentryForFrontend', 'browserTracingIntegration', 'routeLabel']);
 	_apply_top([['clusterLimit', 'deliverJobConcurrency', 'inboxJobConcurrency', 'relashionshipJobConcurrency', 'deliverJobPerSec', 'inboxJobPerSec', 'relashionshipJobPerSec', 'deliverJobMaxAttempts', 'inboxJobMaxAttempts']]);
 	_apply_top([['outgoingAddress', 'outgoingAddressFamily', 'proxy', 'proxySmtp', 'mediaDirectory', 'mediaProxy', 'proxyRemoteFiles', 'videoThumbnailGenerator']]);
-	_apply_top([['maxFileSize', 'maxNoteLength', 'maxRemoteNoteLength', 'maxAltTextLength', 'maxRemoteAltTextLength', 'pidFile', 'filePermissionBits']]);
+	_apply_top([['maxFileSize', 'maxNoteLength', 'maxRemoteNoteLength', 'maxAltTextLength', 'maxRemoteAltTextLength', 'maxBioLength', 'maxRemoteBioLength', 'maxDialogAnnouncements', 'pidFile', 'filePermissionBits']]);
 	_apply_top(['import', ['downloadTimeout', 'maxFileSize']]);
 	_apply_top([['signToActivityPubGet', 'checkActivityPubGetSignature', 'setupPassword', 'disallowExternalApRedirect']]);
 	_apply_top(['logging', 'sql', ['disableQueryTruncation', 'enableQueryParamLogging']]);
-	_apply_top(['logging', ['verbose']]);
 	_apply_top(['activityLogging', ['enabled', 'preSave', 'maxAge']]);
 	_apply_top(['customHtml', ['head']]);
 }

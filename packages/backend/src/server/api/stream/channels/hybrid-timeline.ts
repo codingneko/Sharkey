@@ -6,9 +6,10 @@
 import { Injectable } from '@nestjs/common';
 import type { Packed } from '@/misc/json-schema.js';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
+import { CacheService } from '@/core/CacheService.js';
 import { bindThis } from '@/decorators.js';
 import { RoleService } from '@/core/RoleService.js';
-import { isRenotePacked, isQuotePacked } from '@/misc/is-renote.js';
+import { isPackedPureRenote } from '@/misc/is-renote.js';
 import type { JsonObject } from '@/misc/json-value.js';
 import { isReply } from '@/misc/is-reply.js';
 import { type Channel, NoteChannel, type MiChannelService } from '../channel.js';
@@ -29,13 +30,15 @@ class HybridTimelineChannel extends NoteChannel {
 		noteEntityService: NoteEntityService,
 
 		private roleService: RoleService,
+		private readonly cacheService: CacheService,
 	) {
 		super(id, connection, noteEntityService);
 	}
 
 	@bindThis
 	public async init(params: JsonObject): Promise<void> {
-		const policies = await this.roleService.getUserPolicies(this.user ? this.user.id : null);
+		if (!this.user) return;
+		const policies = await this.roleService.getUserPolicies(this.user);
 		if (!policies.ltlAvailable) return;
 
 		this.withRenotes = !!(params.withRenotes ?? true);
@@ -48,11 +51,13 @@ class HybridTimelineChannel extends NoteChannel {
 
 	@bindThis
 	private async onNote(note: Packed<'Note'>) {
-		const isMe = this.user?.id === note.userId;
+		// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+		const userId = this.user!.id;
+		const isMe = userId === note.userId;
 
 		if (this.withFiles && (note.fileIds == null || note.fileIds.length === 0)) return;
 		if (!this.withBots && note.user.isBot) return;
-		if (!this.withRenotes && isRenotePacked(note) && !isQuotePacked(note)) return;
+		if (!this.withRenotes && isPackedPureRenote(note)) return;
 		if (!this.withReplies && isReply(note)) return;
 
 		// チャンネルの投稿ではなく、自分自身の投稿 または
@@ -61,9 +66,9 @@ class HybridTimelineChannel extends NoteChannel {
 		// フォローしているチャンネルの投稿 の場合だけ
 		if (!(
 			(note.channelId == null && isMe) ||
-			(note.channelId == null && this.following.has(note.userId)) ||
+			(note.channelId == null && (await this.cacheService.getUserRelation(userId, note.userId)).isFollowing) ||
 			(note.channelId == null && (note.user.host == null && note.visibility === 'public')) ||
-			(note.channelId != null && this.followingChannels.has(note.channelId))
+			(note.channelId != null && this.followingChannels?.has(note.channelId))
 		)) return;
 
 		const preparedNote = await this.prepareNote(note);
@@ -88,6 +93,7 @@ export class HybridTimelineChannelService implements MiChannelService<true> {
 	constructor(
 		private roleService: RoleService,
 		private noteEntityService: NoteEntityService,
+		private readonly cacheService: CacheService,
 	) {
 	}
 
@@ -98,6 +104,7 @@ export class HybridTimelineChannelService implements MiChannelService<true> {
 			connection,
 			this.noteEntityService,
 			this.roleService,
+			this.cacheService,
 		);
 	}
 }

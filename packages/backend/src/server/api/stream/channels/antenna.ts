@@ -8,7 +8,7 @@ import { DI } from '@/di-symbols.js';
 import type { AntennasRepository } from '@/models/_.js';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { bindThis } from '@/decorators.js';
-import type { GlobalEvents } from '@/core/GlobalEventService.js';
+import type { AntennaEventPayload } from '@/core/GlobalEventService.js';
 import type { JsonObject } from '@/misc/json-value.js';
 import { type Channel, NoteChannel, type MiChannelService } from '../channel.js';
 
@@ -24,7 +24,7 @@ class AntennaChannel extends NoteChannel {
 		connection: Channel['connection'],
 		noteEntityService: NoteEntityService,
 
-		private antennasReposiotry: AntennasRepository,
+		private antennasRepository: AntennasRepository,
 	) {
 		super(id, connection, noteEntityService);
 	}
@@ -32,10 +32,11 @@ class AntennaChannel extends NoteChannel {
 	@bindThis
 	public async init(params: JsonObject): Promise<boolean> {
 		if (!this.user) return false;
+
 		if (typeof params.antennaId !== 'string') return false;
 		this.antennaId = params.antennaId;
 
-		const antenna = await this.antennasReposiotry.findOne({
+		const antenna = await this.antennasRepository.findOne({
 			select: { id: true, userId: true },
 			where: { id: this.antennaId },
 		});
@@ -48,12 +49,14 @@ class AntennaChannel extends NoteChannel {
 	}
 
 	@bindThis
-	private async onEvent(data: GlobalEvents['antenna']['payload']) {
-		const note = await this.noteEntityService.pack(data.body.id, this.user, { detail: true });
+	private async onEvent(data: AntennaEventPayload) {
+		const preparedNote = await this.noteEntityService.pack(data.body.id, this.user, { detail: true });
 
-		if (!this.isNoteVisibleForMe(note)) return;
+		// TODO this duplicate work could be avoided if the visibility data were returned from NoteEntityService.pack().
+		const { accessible, silence } = await this.noteVisibilityService.checkNoteVisibilityAsync(preparedNote, this.user);
+		if (!accessible || silence) return;
 
-		this.send('note', note);
+		this.send('note', preparedNote);
 	}
 
 	@bindThis

@@ -11,12 +11,13 @@ import { dirname } from 'node:path';
 import { ModuleMocker } from 'jest-mock';
 import { Test } from '@nestjs/testing';
 import { afterAll, beforeAll, describe, test } from '@jest/globals';
+import type { MockMetadata } from 'jest-mock';
 import { GlobalModule } from '@/GlobalModule.js';
-import { FileInfo, FileInfoService } from '@/core/FileInfoService.js';
+import { CoreModule } from '@/core/CoreModule.js';
+import { FileInfo, FileInfoService, ImageDimensionsExceedLimit } from '@/core/FileInfoService.js';
 //import { DI } from '@/di-symbols.js';
 import { LoggerService } from '@/core/LoggerService.js';
 import type { TestingModule } from '@nestjs/testing';
-import type { MockFunctionMetadata } from 'jest-mock';
 
 const _filename = fileURLToPath(import.meta.url);
 const _dirname = dirname(_filename);
@@ -27,12 +28,14 @@ const moduleMocker = new ModuleMocker(global);
 describe('FileInfoService', () => {
 	let app: TestingModule;
 	let fileInfoService: FileInfoService;
-	const strip = (fileInfo: FileInfo): Omit<Partial<FileInfo>, 'warnings' | 'blurhash' | 'sensitive' | 'porn'> => {
+	const strip = (fileInfo: FileInfo): Omit<Partial<FileInfo>, 'blurhash' | 'sensitive' | 'porn'> => {
 		const fi: Partial<FileInfo> = fileInfo;
-		delete fi.warnings;
 		delete fi.sensitive;
 		delete fi.blurhash;
 		delete fi.porn;
+
+		// normalize warnings for easier testing
+		fi.warnings = fi.warnings?.map(w => typeof(w) === 'string' ? w : w[0]);
 
 		return fi;
 	};
@@ -41,21 +44,19 @@ describe('FileInfoService', () => {
 		app = await Test.createTestingModule({
 			imports: [
 				GlobalModule,
-			],
-			providers: [
-				LoggerService,
-				FileInfoService,
+				CoreModule,
 			],
 		})
 			.useMocker((token) => {
 				if (typeof token === 'function') {
-					const mockMetadata = moduleMocker.getMetadata(token) as MockFunctionMetadata<any, any>;
+					const mockMetadata = moduleMocker.getMetadata(token) as MockMetadata<any, any>;
 					const Mock = moduleMocker.generateFromMetadata(mockMetadata);
 					return new Mock();
 				}
 			})
 			.compile();
 
+		await app.init();
 		app.enableShutdownHooks();
 
 		fileInfoService = app.get<FileInfoService>(FileInfoService);
@@ -78,6 +79,7 @@ describe('FileInfoService', () => {
 			width: undefined,
 			height: undefined,
 			orientation: undefined,
+			warnings: [],
 		});
 	});
 
@@ -95,6 +97,7 @@ describe('FileInfoService', () => {
 				width: 192,
 				height: 192,
 				orientation: undefined,
+				warnings: [],
 			});
 		});
 
@@ -111,6 +114,7 @@ describe('FileInfoService', () => {
 				width: 256,
 				height: 256,
 				orientation: undefined,
+				warnings: [],
 			});
 		});
 
@@ -127,6 +131,7 @@ describe('FileInfoService', () => {
 				width: 256,
 				height: 256,
 				orientation: undefined,
+				warnings: [],
 			});
 		});
 
@@ -143,6 +148,7 @@ describe('FileInfoService', () => {
 				width: 256,
 				height: 256,
 				orientation: undefined,
+				warnings: [],
 			});
 		});
 
@@ -159,6 +165,7 @@ describe('FileInfoService', () => {
 				width: 256,
 				height: 256,
 				orientation: undefined,
+				warnings: [],
 			});
 		});
 
@@ -176,6 +183,7 @@ describe('FileInfoService', () => {
 				width: 256,
 				height: 256,
 				orientation: undefined,
+				warnings: [],
 			});
 		});
 
@@ -189,9 +197,10 @@ describe('FileInfoService', () => {
 					mime: 'application/octet-stream',	// do not treat as image
 					ext: null,
 				},
-				width: 25000,
-				height: 25000,
+				width: undefined,
+				height: undefined,
 				orientation: undefined,
+				warnings: [ImageDimensionsExceedLimit],
 			});
 		});
 
@@ -208,6 +217,7 @@ describe('FileInfoService', () => {
 				width: 512,
 				height: 256,
 				orientation: 8,
+				warnings: [],
 			});
 		});
 	});
@@ -226,6 +236,7 @@ describe('FileInfoService', () => {
 					mime: 'audio/mpeg',
 					ext: 'mp3',
 				},
+				warnings: [],
 			});
 		});
 
@@ -242,6 +253,7 @@ describe('FileInfoService', () => {
 					mime: 'audio/wav',
 					ext: 'wav',
 				},
+				warnings: [],
 			});
 		});
 
@@ -258,6 +270,7 @@ describe('FileInfoService', () => {
 					mime: 'audio/aac',
 					ext: 'aac',
 				},
+				warnings: [],
 			});
 		});
 
@@ -274,6 +287,7 @@ describe('FileInfoService', () => {
 					mime: 'audio/flac',
 					ext: 'flac',
 				},
+				warnings: [],
 			});
 		});
 
@@ -290,6 +304,7 @@ describe('FileInfoService', () => {
 					mime: 'audio/mp4',
 					ext: 'm4a',
 				},
+				warnings: [],
 			});
 		});
 
@@ -306,6 +321,7 @@ describe('FileInfoService', () => {
 					mime: 'audio/webm',
 					ext: 'webm',
 				},
+				warnings: [],
 			});
 		});
 	});

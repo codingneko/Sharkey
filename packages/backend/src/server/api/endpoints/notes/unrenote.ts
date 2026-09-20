@@ -10,6 +10,9 @@ import { Endpoint } from '@/server/api/endpoint-base.js';
 import { NoteDeleteService } from '@/core/NoteDeleteService.js';
 import { DI } from '@/di-symbols.js';
 import { GetterService } from '@/server/api/GetterService.js';
+import { UserService } from '@/core/UserService.js';
+import { QueryService } from '@/core/QueryService.js';
+import { trackTask } from '@/misc/promise-tracker.js';
 import { ApiError } from '../../error.js';
 
 export const meta = {
@@ -38,7 +41,6 @@ export const paramDef = {
 	type: 'object',
 	properties: {
 		noteId: { type: 'string', format: 'misskey:id' },
-		quote: { type: 'boolean', default: false },
 	},
 	required: ['noteId'],
 } as const;
@@ -54,6 +56,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 		private getterService: GetterService,
 		private noteDeleteService: NoteDeleteService,
+		private readonly queryService: QueryService,
+		private readonly userService: UserService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			const note = await this.getterService.getNote(ps.noteId).catch(err => {
@@ -61,19 +65,21 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				throw err;
 			});
 
-			const renotes = await this.notesRepository.findBy({
-				userId: me.id,
-				renoteId: note.id,
-			});
+			this.userService.markUserActive(me, true);
 
-			// TODO inline this into the above query
-			for (const note of renotes) {
-				if (ps.quote) {
-					if (note.text) this.noteDeleteService.delete(await this.usersRepository.findOneByOrFail({ id: me.id }), note, false);
-				} else {
-					if (!note.text) this.noteDeleteService.delete(await this.usersRepository.findOneByOrFail({ id: me.id }), note, false);
+			const query = this.notesRepository.createQueryBuilder('note')
+				.where({
+					userId: me.id,
+					renoteId: note.id,
+				});
+			this.queryService.andIsRenote(query, 'note');
+			const renotes = await query.getMany();
+
+			trackTask(async () => {
+				for (const note of renotes) {
+					await this.noteDeleteService.delete(me, note);
 				}
-			}
+			});
 		});
 	}
 }

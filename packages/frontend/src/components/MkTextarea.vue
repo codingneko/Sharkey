@@ -43,7 +43,7 @@ import MkButton from '@/components/MkButton.vue';
 import { i18n } from '@/i18n.js';
 import { Autocomplete } from '@/utility/autocomplete.js';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
 	modelValue: string | null;
 	required?: boolean;
 	readonly?: boolean;
@@ -60,7 +60,9 @@ const props = defineProps<{
 	code?: boolean;
 	tall?: boolean;
 	pre?: boolean;
-}>();
+}>(), {
+	spellcheck: true,
+});
 
 const emit = defineEmits<{
 	(ev: 'change', _ev: KeyboardEvent): void;
@@ -174,7 +176,7 @@ onUnmounted(() => {
 	width: 100%;
 	min-width: 100%;
 	max-width: 100%;
-	min-height: 130px;
+	min-height: 9.29em;
 	margin: 0;
 	padding: 12px;
 	font: inherit;
@@ -211,7 +213,7 @@ onUnmounted(() => {
 
 .tall {
 	> .textarea {
-		min-height: 200px;
+		min-height: 14.29em;
 	}
 }
 

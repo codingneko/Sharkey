@@ -17,9 +17,10 @@ import type { MiNote } from '@/models/Note.js';
 import { bindThis } from '@/decorators.js';
 import { IdService } from '@/core/IdService.js';
 import { NotificationService } from '@/core/NotificationService.js';
+import { TimeService } from '@/global/TimeService.js';
 import { QueueLoggerService } from '../QueueLoggerService.js';
 import type * as Bull from 'bullmq';
-import type { DbJobDataWithUser } from '../types.js';
+import type { DbExportFavoritesJobData } from '../types.js';
 
 @Injectable()
 export class ExportFavoritesProcessorService {
@@ -39,12 +40,13 @@ export class ExportFavoritesProcessorService {
 		private queueLoggerService: QueueLoggerService,
 		private idService: IdService,
 		private notificationService: NotificationService,
+		private readonly timeService: TimeService,
 	) {
 		this.logger = this.queueLoggerService.logger.createSubLogger('export-favorites');
 	}
 
 	@bindThis
-	public async process(job: Bull.Job<DbJobDataWithUser>): Promise<void> {
+	public async process(job: Bull.Job<DbExportFavoritesJobData>): Promise<void> {
 		const user = await this.usersRepository.findOneBy({ id: job.data.user.id });
 		if (user == null) {
 			this.logger.debug(`Skip: user ${job.data.user.id} does not exist`);
@@ -122,7 +124,7 @@ export class ExportFavoritesProcessorService {
 			stream.end();
 			this.logger.debug(`Exported to: ${path}`);
 
-			const fileName = 'favorites-' + dateFormat(new Date(), 'yyyy-MM-dd-HH-mm-ss') + '.json';
+			const fileName = 'favorites-' + dateFormat(this.timeService.date, 'yyyy-MM-dd-HH-mm-ss') + '.json';
 			const driveFile = await this.driveService.addFile({ user, path, name: fileName, force: true, ext: 'json' });
 
 			this.logger.debug(`Exported to: ${driveFile.id}`);

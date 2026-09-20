@@ -12,10 +12,10 @@ import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { DI } from '@/di-symbols.js';
 import { RoleService } from '@/core/RoleService.js';
 import { IdService } from '@/core/IdService.js';
-import { CacheService } from '@/core/CacheService.js';
 import { FanoutTimelineName } from '@/core/FanoutTimelineService.js';
 import { QueryService } from '@/core/QueryService.js';
 import { UserFollowingService } from '@/core/UserFollowingService.js';
+import { UserService } from '@/core/UserService.js';
 import { MiLocalUser } from '@/models/User.js';
 import { FanoutTimelineEndpointService } from '@/core/FanoutTimelineEndpointService.js';
 import { ApiError } from '../../error.js';
@@ -90,10 +90,10 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private roleService: RoleService,
 		private activeUsersChart: ActiveUsersChart,
 		private idService: IdService,
-		private cacheService: CacheService,
 		private queryService: QueryService,
 		private userFollowingService: UserFollowingService,
 		private fanoutTimelineEndpointService: FanoutTimelineEndpointService,
+		private readonly userService: UserService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			const untilId = ps.untilId ?? (ps.untilDate ? this.idService.gen(ps.untilDate!) : null);
@@ -106,6 +106,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 			if (ps.withReplies && ps.withFiles) throw new ApiError(meta.errors.bothWithRepliesAndWithFiles);
 
+			this.userService.markUserActive(me);
+
 			if (!this.serverSettings.enableFanoutTimeline) {
 				const timeline = await this.getFromDb({
 					untilId,
@@ -116,10 +118,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 					withBots: ps.withBots,
 					withRenotes: ps.withRenotes,
 				}, me);
-
-				process.nextTick(() => {
-					this.activeUsersChart.read(me);
-				});
 
 				return await this.noteEntityService.packMany(timeline, me);
 			}
@@ -145,12 +143,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				];
 			}
 
-			const [
-				followings,
-			] = await Promise.all([
-				this.cacheService.userFollowingsCache.fetch(me.id),
-			]);
-
 			const redisTimeline = await this.fanoutTimelineEndpointService.timeline({
 				untilId,
 				sinceId,
@@ -159,16 +151,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				me,
 				redisTimelines: timelineConfig,
 				useDbFallback: this.serverSettings.enableFanoutTimelineDbFallback,
-				alwaysIncludeMyNotes: true,
 				excludePureRenotes: !ps.withRenotes,
 				excludeBots: !ps.withBots,
-				noteFilter: note => {
-					if (note.reply && note.reply.visibility === 'followers') {
-						if (!followings.has(note.reply.userId) && note.reply.userId !== me.id) return false;
-					}
-
-					return true;
-				},
 				dbFallback: async (untilId, sinceId, limit) => await this.getFromDb({
 					untilId,
 					sinceId,
@@ -178,10 +162,6 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 					withBots: ps.withBots,
 					withRenotes: ps.withRenotes,
 				}, me),
-			});
-
-			process.nextTick(() => {
-				this.activeUsersChart.read(me);
 			});
 
 			return redisTimeline;
@@ -198,14 +178,14 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		withRenotes: boolean,
 	}, me: MiLocalUser) {
 		const query = this.queryService.makePaginationQuery(this.notesRepository.createQueryBuilder('note'), ps.sinceId, ps.untilId)
-			// 1. by a user I follow, 2. a public local post, 3. my own post
+			// by a user I follow OR a public local post OR my own post
 			.andWhere(new Brackets(qb => this.queryService
 				.orFollowingUser(qb, ':meId', 'note.userId')
 				.orWhere(new Brackets(qbb => qbb
 					.andWhere('note.visibility = \'public\'')
 					.andWhere('note.userHost IS NULL')))
 				.orWhere(':meId = note.userId')))
-			// 1. in a channel I follow, 2. not in a channel
+			// in a channel I follow OR not in a channel
 			.andWhere(new Brackets(qb => this.queryService
 				.orFollowingChannel(qb, ':meId', 'note.channelId')
 				.orWhere('note.channelId IS NULL')))
@@ -218,18 +198,16 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			.limit(ps.limit);
 
 		if (!ps.withReplies) {
-			query
-				// 1. Not a reply, 2. a self-reply
-				.andWhere(new Brackets(qb => qb
-					.orWhere('note.replyId IS NULL') // 返信ではない
-					.orWhere('note.replyUserId = note.userId')));
+			this.queryService.generateExcludedRepliesQueryForNotes(query, me);
 		}
 
 		this.queryService.generateVisibilityQuery(query, me);
 		this.queryService.generateBlockedHostQueryForNote(query);
+		this.queryService.generateSuspendedUserQueryForNote(query);
 		this.queryService.generateSilencedUserQueryForNotes(query, me);
 		this.queryService.generateMutedUserQueryForNotes(query, me);
 		this.queryService.generateBlockedUserQueryForNotes(query, me);
+		this.queryService.generateMutedNoteThreadQuery(query, me);
 
 		if (ps.withFiles) {
 			query.andWhere('note.fileIds != \'{}\'');

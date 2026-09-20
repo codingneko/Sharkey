@@ -8,7 +8,7 @@ import type { Packed } from '@/misc/json-schema.js';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { bindThis } from '@/decorators.js';
 import { RoleService } from '@/core/RoleService.js';
-import { isRenotePacked, isQuotePacked } from '@/misc/is-renote.js';
+import { isPackedPureRenote } from '@/misc/is-renote.js';
 import type { JsonObject } from '@/misc/json-value.js';
 import { type Channel, NoteChannel, type MiChannelService } from '../channel.js';
 
@@ -48,7 +48,7 @@ class GlobalTimelineChannel extends NoteChannel {
 		if (note.channelId != null) return;
 		if (this.withFiles && (note.fileIds == null || note.fileIds.length === 0)) return;
 		if (!this.withBots && note.user.isBot) return;
-		if (!this.withRenotes && isRenotePacked(note) && !isQuotePacked(note)) return;
+		if (!this.withRenotes && isPackedPureRenote(note)) return;
 
 		const preparedNote = await this.prepareNote(note);
 		if (preparedNote) {

@@ -6,8 +6,9 @@
 import { Injectable } from '@nestjs/common';
 import { isUserFromMutedInstance } from '@/misc/is-instance-muted.js';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
+import { CacheService } from '@/core/CacheService.js';
 import { bindThis } from '@/decorators.js';
-import type { JsonObject } from '@/misc/json-value.js';
+import type { MainEventPayload } from '@/core/GlobalEventService.js';
 import { type Channel, NoteChannel, type MiChannelService } from '../channel.js';
 
 class MainChannel extends NoteChannel {
@@ -20,47 +21,54 @@ class MainChannel extends NoteChannel {
 		id: string,
 		connection: Channel['connection'],
 		noteEntityService: NoteEntityService,
+		private readonly cacheService: CacheService,
 	) {
 		super(id, connection, noteEntityService);
 	}
 
 	@bindThis
-	public async init(params: JsonObject): Promise<boolean> {
+	public async init(): Promise<boolean> {
 		if (!this.user) return false;
 
-		this.subscriber.on(`mainStream:${this.user.id}`, async data => {
-			switch (data.type) {
-				case 'notification': {
-					// Ignore notifications from instances the user has muted
-					if (isUserFromMutedInstance(data.body, this.userMutedInstances)) return;
-					if (data.body.userId && this.userIdsWhoMeMuting.has(data.body.userId)) return;
-
-					if (data.body.note && data.body.note.isHidden) {
-						if (this.isNoteVisibleForMe(data.body.note)) return;
-						const note = await this.noteEntityService.pack(data.body.note.id, this.user, {
-							detail: true,
-						});
-						data.body.note = note;
-					}
-					break;
-				}
-				case 'mention': {
-					if (!this.isNoteVisibleForMe(data.body)) return;
-					if (this.isNoteMutedOrBlocked(data.body)) return;
-					if (data.body.isHidden) {
-						const note = await this.noteEntityService.pack(data.body.id, this.user, {
-							detail: true,
-						});
-						data.body = note;
-					}
-					break;
-				}
-			}
-
-			this.send(data.type, data.body);
-		});
+		this.subscriber.on(`mainStream:${this.user.id}`, this.onEvent);
 
 		return true;
+	}
+
+	@bindThis
+	private async onEvent(data: MainEventPayload): Promise<void> {
+		switch (data.type) {
+			case 'notification': {
+				// Ignore notifications from instances the user has muted
+				if (isUserFromMutedInstance(data.body, this.userMutedInstances)) return;
+				if (data.body.userId) {
+					const relation = await this.cacheService.getUserRelation(this.user!.id, data.body.userId);
+					if (relation.isMuting) return;
+				}
+
+				if (data.body.note) {
+					const preparedNote = await this.prepareNote(data.body.note);
+					if (!preparedNote) return;
+
+					data.body.note = preparedNote;
+				}
+				break;
+			}
+			case 'mention': {
+				const preparedNote = await this.prepareNote(data.body);
+				if (preparedNote) {
+					this.send(data.type, preparedNote);
+				}
+				return;
+			}
+		}
+
+		this.send(data.type, data.body);
+	}
+
+	@bindThis
+	public dispose() {
+		this.subscriber.off(`mainStream:${this.user?.id}`, this.onEvent);
 	}
 }
 
@@ -72,6 +80,7 @@ export class MainChannelService implements MiChannelService<true> {
 
 	constructor(
 		private noteEntityService: NoteEntityService,
+		private readonly cacheService: CacheService,
 	) {
 	}
 
@@ -81,6 +90,7 @@ export class MainChannelService implements MiChannelService<true> {
 			id,
 			connection,
 			this.noteEntityService,
+			this.cacheService,
 		);
 	}
 }

@@ -20,14 +20,16 @@ import { RoleService } from '@/core/RoleService.js';
 import type { Config } from '@/config.js';
 import { sendRateLimitHeaders } from '@/misc/rate-limit-utils.js';
 import { SkRateLimiterService } from '@/server/SkRateLimiterService.js';
+import { ServerUtilityService } from '@/server/ServerUtilityService.js';
+import { TimeService } from '@/global/TimeService.js';
+import { CacheManagementService, type ManagedMemoryKVCache } from '@/global/CacheManagementService.js';
 import { renderInlineError } from '@/misc/render-inline-error.js';
+import { renderFullError } from '@/misc/render-full-error.js';
 import { ApiError } from './error.js';
 import { ApiLoggerService } from './ApiLoggerService.js';
 import { AuthenticateService, AuthenticationError } from './AuthenticateService.js';
 import type { FastifyRequest, FastifyReply } from 'fastify';
-import type { OnApplicationShutdown } from '@nestjs/common';
 import type { IEndpointMeta, IEndpoint } from './endpoints.js';
-import { renderFullError } from '@/misc/render-full-error.js';
 
 const accessDenied = {
 	message: 'Access denied.',
@@ -36,10 +38,9 @@ const accessDenied = {
 };
 
 @Injectable()
-export class ApiCallService implements OnApplicationShutdown {
-	private logger: Logger;
-	private userIpHistories: Map<MiUser['id'], Set<string>>;
-	private userIpHistoriesClearIntervalId: NodeJS.Timeout;
+export class ApiCallService {
+	private readonly logger: Logger;
+	private readonly userIpHistories: ManagedMemoryKVCache<Set<string>>;
 
 	constructor(
 		@Inject(DI.meta)
@@ -55,13 +56,13 @@ export class ApiCallService implements OnApplicationShutdown {
 		private rateLimiterService: SkRateLimiterService,
 		private roleService: RoleService,
 		private apiLoggerService: ApiLoggerService,
+		private readonly timeService: TimeService,
+		private readonly serverUtilityServer: ServerUtilityService,
+
+		cacheManagementService: CacheManagementService,
 	) {
 		this.logger = this.apiLoggerService.logger;
-		this.userIpHistories = new Map<MiUser['id'], Set<string>>();
-
-		this.userIpHistoriesClearIntervalId = setInterval(() => {
-			this.userIpHistories.clear();
-		}, 1000 * 60 * 60);
+		this.userIpHistories = cacheManagementService.createMemoryKVCache('userIpHistories', 1000 * 60 * 60); // 1 hour
 	}
 
 	#sendApiError(reply: FastifyReply, err: ApiError): void {
@@ -143,11 +144,11 @@ export class ApiCallService implements OnApplicationShutdown {
 	}
 
 	@bindThis
-	public handleRequest(
+	public async handleRequest(
 		endpoint: IEndpoint & { exec: any },
 		request: FastifyRequest<{ Body: Record<string, unknown> | undefined, Querystring: Record<string, unknown> }>,
 		reply: FastifyReply,
-	): void {
+	): Promise<void> {
 		// Tell crawlers not to index API endpoints.
 		// https://developers.google.com/search/docs/crawling-indexing/block-indexing
 		reply.header('X-Robots-Tag', 'noindex');
@@ -164,8 +165,8 @@ export class ApiCallService implements OnApplicationShutdown {
 			reply.code(400);
 			return;
 		}
-		this.authenticateService.authenticate(token).then(([user, app]) => {
-			this.call(endpoint, user, app, body, null, request, reply).then((res) => {
+		await this.authenticateService.authenticate(token).then(async ([user, app]) => {
+			await this.call(endpoint, user, app, body, null, request, reply).then((res) => {
 				if (request.method === 'GET' && endpoint.meta.cacheSec && !token && !user) {
 					reply.header('Cache-Control', `public, max-age=${endpoint.meta.cacheSec}`);
 				}
@@ -175,7 +176,8 @@ export class ApiCallService implements OnApplicationShutdown {
 			});
 
 			if (user) {
-				this.logIp(request, user);
+				// logIp records errors directly
+				this.logIp(request, user).catch(() => null);
 			}
 		}).catch(err => {
 			this.#sendAuthenticationError(reply, err);
@@ -223,8 +225,8 @@ export class ApiCallService implements OnApplicationShutdown {
 			reply.code(400);
 			return;
 		}
-		this.authenticateService.authenticate(token).then(([user, app]) => {
-			this.call(endpoint, user, app, fields, {
+		await this.authenticateService.authenticate(token).then(async ([user, app]) => {
+			await this.call(endpoint, user, app, fields, {
 				name: multipartData.filename,
 				path: path,
 			}, request, reply).then((res) => {
@@ -235,7 +237,8 @@ export class ApiCallService implements OnApplicationShutdown {
 			});
 
 			if (user) {
-				this.logIp(request, user);
+				// logIp records errors directly
+				this.logIp(request, user).catch(() => null);
 			}
 		}).catch(err => {
 			cleanup();
@@ -266,7 +269,7 @@ export class ApiCallService implements OnApplicationShutdown {
 	}
 
 	@bindThis
-	private logIp(request: FastifyRequest, user: MiLocalUser) {
+	private async logIp(request: FastifyRequest, user: MiLocalUser) {
 		if (!this.meta.enableIpLogging) return;
 		const ip = request.ip;
 		if (!ip) {
@@ -274,21 +277,23 @@ export class ApiCallService implements OnApplicationShutdown {
 			return;
 		}
 
-		const ips = this.userIpHistories.get(user.id);
-		if (ips == null || !ips.has(ip)) {
-			if (ips == null) {
-				this.userIpHistories.set(user.id, new Set([ip]));
-			} else {
-				ips.add(ip);
-			}
+		let ips = this.userIpHistories.get(user.id);
+		if (ips == null) {
+			ips = new Set<string>();
+			this.userIpHistories.set(user.id, ips);
+		}
+
+		if (!ips.has(user.id)) {
+			ips.add(ip);
 
 			try {
-				this.userIpsRepository.createQueryBuilder().insert().values({
-					createdAt: new Date(),
+				await this.userIpsRepository.createQueryBuilder().insert().values({
+					createdAt: this.timeService.date,
 					userId: user.id,
 					ip: ip,
 				}).orIgnore(true).execute();
-			} catch {
+			} catch (err) {
+				this.logger.warn(`Failed to save IP address ${ip} for user ${user.id}: ${renderInlineError(err)}`);
 			}
 		}
 	}
@@ -350,20 +355,11 @@ export class ApiCallService implements OnApplicationShutdown {
 		}
 
 		if (ep.meta.requireCredential || ep.meta.requireModerator || ep.meta.requireAdmin) {
-			if (user == null && ep.meta.requireCredential !== 'optional') {
-				throw new ApiError({
-					message: 'Credential required.',
-					code: 'CREDENTIAL_REQUIRED',
-					id: '1384574d-a912-4b81-8601-c7b1c4085df1',
-					httpStatusCode: 401,
-				});
-			} else if (user?.isSuspended) {
-				throw new ApiError({
-					message: 'Your account has been suspended.',
-					code: 'YOUR_ACCOUNT_SUSPENDED',
-					kind: 'permission',
-					id: 'a8c724b3-6e9c-4b46-b1a8-bc3ed6258370',
-				});
+			if (user != null || ep.meta.requireCredential !== 'optional') {
+				const userError = this.serverUtilityServer.assertClientUser(user);
+				if (userError) {
+					throw new ApiError(userError);
+				}
 			}
 		}
 
@@ -452,15 +448,5 @@ export class ApiCallService implements OnApplicationShutdown {
 			return await ep.exec(data, user, token, file, request.ip, request.headers)
 				.catch((err: Error) => this.#onExecError(ep, data, err, user?.id));
 		}
-	}
-
-	@bindThis
-	public dispose(): void {
-		clearInterval(this.userIpHistoriesClearIntervalId);
-	}
-
-	@bindThis
-	public onApplicationShutdown(signal?: string | undefined): void {
-		this.dispose();
 	}
 }

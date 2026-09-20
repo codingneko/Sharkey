@@ -9,10 +9,10 @@ import { SkLatestNote, MiFollowing } from '@/models/_.js';
 import type { NotesRepository } from '@/models/_.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
+import { UserService } from '@/core/UserService.js';
 import { DI } from '@/di-symbols.js';
 import { QueryService } from '@/core/QueryService.js';
 import { ApiError } from '@/server/api/error.js';
-import ActiveUsersChart from '@/core/chart/charts/active-users.js';
 
 export const meta = {
 	tags: ['notes'],
@@ -79,11 +79,13 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 		private readonly noteEntityService: NoteEntityService,
 		private readonly queryService: QueryService,
-		private readonly activeUsersChart: ActiveUsersChart,
+		private readonly userService: UserService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			if (ps.includeReplies && ps.filesOnly) throw new ApiError(meta.errors.bothWithRepliesAndWithFiles);
 			if (ps.list === 'followers' && ps.includeNonPublic) throw new ApiError(meta.errors.bothWithFollowersAndIncludeNonPublic);
+
+			this.userService.markUserActive(me);
 
 			const query = this.notesRepository
 				.createQueryBuilder('note')
@@ -150,11 +152,13 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			// Hide blocked users / instances
 			query.andWhere('"user"."isSuspended" = false');
 			this.queryService.generateBlockedHostQueryForNote(query);
+			this.queryService.generateSilencedUserQueryForNotes(query, me, ps.list !== 'followers');
+			this.queryService.generateSuspendedUserQueryForNote(query);
 
 			// Respect blocks, mutes, and privacy
 			this.queryService.generateVisibilityQuery(query, me);
 			this.queryService.generateBlockedUserQueryForNotes(query, me);
-			this.queryService.generateMutedUserQueryForNotes(query, me);
+			this.queryService.generateMutedUserQueryForNotes(query, me, ps.list !== 'followers');
 
 			// Support pagination
 			this.queryService
@@ -163,12 +167,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 			// Query and return the next page
 			const notes = await query.getMany();
-
-			process.nextTick(() => {
-				this.activeUsersChart.read(me);
-			});
-
-			return await this.noteEntityService.packMany(notes, me, { skipHide: true });
+			return await this.noteEntityService.packMany(notes, me);
 		});
 	}
 }

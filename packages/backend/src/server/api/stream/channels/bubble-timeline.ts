@@ -8,9 +8,9 @@ import type { Packed } from '@/misc/json-schema.js';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { bindThis } from '@/decorators.js';
 import { RoleService } from '@/core/RoleService.js';
-import { isRenotePacked, isQuotePacked } from '@/misc/is-renote.js';
 import type { JsonObject } from '@/misc/json-value.js';
 import { UtilityService } from '@/core/UtilityService.js';
+import { isPackedPureRenote } from '@/misc/is-renote.js';
 import { type Channel, MiChannelService, NoteChannel } from '../channel.js';
 
 class BubbleTimelineChannel extends NoteChannel {
@@ -34,7 +34,7 @@ class BubbleTimelineChannel extends NoteChannel {
 
 	@bindThis
 	public async init(params: JsonObject): Promise<boolean> {
-		const policies = await this.roleService.getUserPolicies(this.user ? this.user.id : null);
+		const policies = await this.roleService.getUserPolicies(this.user);
 		if (!policies.btlAvailable) return false;
 
 		this.withRenotes = !!(params.withRenotes ?? true);
@@ -53,7 +53,7 @@ class BubbleTimelineChannel extends NoteChannel {
 		if (!this.utilityService.isBubbledHost(note.user.host)) return;
 		if (this.withFiles && (note.fileIds == null || note.fileIds.length === 0)) return;
 		if (!this.withBots && note.user.isBot) return;
-		if (!this.withRenotes && isRenotePacked(note) && !isQuotePacked(note)) return;
+		if (!this.withRenotes && isPackedPureRenote(note)) return;
 
 		const preparedNote = await this.prepareNote(note);
 		if (preparedNote) {

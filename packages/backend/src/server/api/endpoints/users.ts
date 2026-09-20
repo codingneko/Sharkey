@@ -11,6 +11,8 @@ import { QueryService } from '@/core/QueryService.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import { DI } from '@/di-symbols.js';
 import { RoleService } from '@/core/RoleService.js';
+import { TimeService } from '@/global/TimeService.js';
+import { promiseMap } from '@/misc/promise-map.js';
 import type { SelectQueryBuilder } from 'typeorm';
 
 export const meta = {
@@ -24,7 +26,7 @@ export const meta = {
 		items: {
 			type: 'object',
 			optional: false, nullable: false,
-			ref: 'UserDetailed',
+			ref: 'User',
 		},
 	},
 
@@ -50,6 +52,11 @@ export const paramDef = {
 			default: null,
 			description: 'The local host is represented with `null`.',
 		},
+		detail: {
+			type: 'boolean',
+			nullable: false,
+			default: true,
+		},
 	},
 	required: [],
 } as const;
@@ -63,6 +70,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private userEntityService: UserEntityService,
 		private queryService: QueryService,
 		private readonly roleService: RoleService,
+		private readonly timeService: TimeService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			const query = this.usersRepository.createQueryBuilder('user')
@@ -70,7 +78,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				.andWhere('user.isSuspended = FALSE');
 
 			switch (ps.state) {
-				case 'alive': query.andWhere('user.updatedAt > :date', { date: new Date(Date.now() - 1000 * 60 * 60 * 24 * 5) }); break;
+				case 'alive': query.andWhere('user.updatedAt > :date', { date: new Date(this.timeService.now - 1000 * 60 * 60 * 24 * 5) }); break;
 			}
 
 			switch (ps.origin) {
@@ -106,12 +114,12 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			// 1. It may return less than "limit" results.
 			// 2. A span of more than "limit" consecutive non-trendable users may cause the pagination to stop early.
 			// Unfortunately, there's no better solution unless we refactor role policies to be persisted to the DB.
-			const usersWithRoles = await Promise.all(allUsers.map(async u => [u, await this.roleService.getUserPolicies(u)] as const));
+			const usersWithRoles = await promiseMap(allUsers, async u => [u, await this.roleService.getUserPolicies(u)] as const, { limiter: 4 });
 			const users = usersWithRoles
 				.filter(([,p]) => p.canTrend)
 				.map(([u]) => u);
 
-			return await this.userEntityService.packMany(users, me, { schema: 'UserDetailed' });
+			return await this.userEntityService.packMany(users, me, { schema: ps.detail ? 'UserDetailed' : 'UserLite' });
 		});
 	}
 

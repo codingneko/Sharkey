@@ -28,6 +28,9 @@ import { CustomEmojiService } from '@/core/CustomEmojiService.js';
 import { emojiRegex } from '@/misc/emoji-regex.js';
 import { NotificationService } from '@/core/NotificationService.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
+import { TimeService } from '@/global/TimeService.js';
+import { CacheService } from '@/core/CacheService.js';
+import { isLocalUser } from '@/models/User.js';
 
 const MAX_ROOM_MEMBERS = 30;
 const MAX_REACTIONS_PER_MESSAGE = 100;
@@ -91,6 +94,8 @@ export class ChatService {
 		private userFollowingService: UserFollowingService,
 		private customEmojiService: CustomEmojiService,
 		private moderationLogService: ModerationLogService,
+		private readonly timeService: TimeService,
+		private readonly cacheService: CacheService,
 	) {
 	}
 
@@ -206,26 +211,26 @@ export class ChatService {
 
 		const packedMessage = await this.chatEntityService.packMessageLiteFor1on1(inserted);
 
-		if (this.userEntityService.isLocalUser(toUser)) {
+		if (isLocalUser(toUser)) {
 			const redisPipeline = this.redisClient.pipeline();
 			redisPipeline.set(`newUserChatMessageExists:${toUser.id}:${fromUser.id}`, message.id);
 			redisPipeline.sadd(`newChatMessagesExists:${toUser.id}`, `user:${fromUser.id}`);
 			redisPipeline.exec();
 		}
 
-		if (this.userEntityService.isLocalUser(fromUser)) {
+		if (isLocalUser(fromUser)) {
 			// 自分のストリーム
 			this.globalEventService.publishChatUserStream(fromUser.id, toUser.id, 'message', packedMessage);
 		}
 
-		if (this.userEntityService.isLocalUser(toUser)) {
+		if (isLocalUser(toUser)) {
 			// 相手のストリーム
 			this.globalEventService.publishChatUserStream(toUser.id, fromUser.id, 'message', packedMessage);
 		}
 
 		// 3秒経っても既読にならなかったらイベント発行
-		if (this.userEntityService.isLocalUser(toUser)) {
-			setTimeout(async () => {
+		if (isLocalUser(toUser)) {
+			this.timeService.startTimer(async () => {
 				const marker = await this.redisClient.get(`newUserChatMessageExists:${toUser.id}:${fromUser.id}`);
 
 				if (marker == null) return; // 既読
@@ -285,7 +290,7 @@ export class ChatService {
 		redisPipeline.exec();
 
 		// 3秒経っても既読にならなかったらイベント発行
-		setTimeout(async () => {
+		this.timeService.startTimer(async () => {
 			const redisPipeline = this.redisClient.pipeline();
 			for (const membership of membershipsOtherThanMe) {
 				redisPipeline.get(`newRoomChatMessageExists:${membership.userId}:${toRoom.id}`);
@@ -342,11 +347,11 @@ export class ChatService {
 	}
 
 	@bindThis
-	public async hasPermissionToViewRoomTimeline(meId: MiUser['id'], room: MiChatRoom) {
-		if (await this.isRoomMember(room, meId)) {
+	public async hasPermissionToViewRoomTimeline(me: MiUser, room: MiChatRoom) {
+		if (await this.isRoomMember(room, me.id)) {
 			return true;
 		} else {
-			const iAmModerator = await this.roleService.isModerator({ id: meId });
+			const iAmModerator = await this.roleService.isModerator(me);
 			if (iAmModerator) {
 				return true;
 			}
@@ -361,14 +366,14 @@ export class ChatService {
 
 		if (message.toUserId) {
 			const [fromUser, toUser] = await Promise.all([
-				this.usersRepository.findOneByOrFail({ id: message.fromUserId }),
-				this.usersRepository.findOneByOrFail({ id: message.toUserId }),
+				this.cacheService.findUserById(message.fromUserId),
+				this.cacheService.findUserById(message.toUserId),
 			]);
 
-			if (this.userEntityService.isLocalUser(fromUser)) this.globalEventService.publishChatUserStream(message.fromUserId, message.toUserId, 'deleted', message.id);
-			if (this.userEntityService.isLocalUser(toUser)) this.globalEventService.publishChatUserStream(message.toUserId, message.fromUserId, 'deleted', message.id);
+			if (isLocalUser(fromUser)) this.globalEventService.publishChatUserStream(message.fromUserId, message.toUserId, 'deleted', message.id);
+			if (isLocalUser(toUser)) this.globalEventService.publishChatUserStream(message.toUserId, message.fromUserId, 'deleted', message.id);
 
-			if (this.userEntityService.isLocalUser(fromUser) && this.userEntityService.isRemoteUser(toUser)) {
+			if (isLocalUser(fromUser) && this.userEntityService.isRemoteUser(toUser)) {
 				//const activity = this.apRendererService.addContext(this.apRendererService.renderDelete(this.apRendererService.renderTombstone(`${this.config.url}/notes/${message.id}`), fromUser));
 				//this.queueService.deliver(fromUser, activity, toUser.inbox);
 			}
@@ -563,12 +568,12 @@ export class ChatService {
 	}
 
 	@bindThis
-	public async hasPermissionToDeleteRoom(meId: MiUser['id'], room: MiChatRoom) {
-		if (room.ownerId === meId) {
+	public async hasPermissionToDeleteRoom(me: MiUser, room: MiChatRoom) {
+		if (room.ownerId === me.id) {
 			return true;
 		}
 
-		const iAmModerator = await this.roleService.isModerator({ id: meId });
+		const iAmModerator = await this.roleService.isModerator(me);
 		if (iAmModerator) {
 			return true;
 		}
@@ -580,11 +585,20 @@ export class ChatService {
 	public async deleteRoom(room: MiChatRoom, deleter?: MiUser) {
 		await this.chatRoomsRepository.delete(room.id);
 
+		// Erase any message notifications for this room
+		const redisPipeline = this.redisClient.pipeline();
+		const memberships = await this.chatRoomMembershipsRepository.findBy({ roomId: room.id });
+		for (const membership of memberships) {
+			redisPipeline.del(`newRoomChatMessageExists:${membership.userId}:${room.id}`);
+			redisPipeline.srem(`newChatMessagesExists:${membership.userId}`, `room:${room.id}`);
+		}
+		await redisPipeline.exec();
+
 		if (deleter) {
 			const deleterIsModerator = await this.roleService.isModerator(deleter);
 
 			if (deleterIsModerator) {
-				this.moderationLogService.log(deleter, 'deleteChatRoom', {
+				await this.moderationLogService.log(deleter, 'deleteChatRoom', {
 					roomId: room.id,
 					room: room,
 				});
@@ -594,12 +608,12 @@ export class ChatService {
 
 	@bindThis
 	public async findMyRoomById(ownerId: MiUser['id'], roomId: MiChatRoom['id']) {
-		return this.chatRoomsRepository.findOneBy({ id: roomId, ownerId: ownerId });
+		return await this.chatRoomsRepository.findOneBy({ id: roomId, ownerId: ownerId });
 	}
 
 	@bindThis
 	public async findRoomById(roomId: MiChatRoom['id']) {
-		return this.chatRoomsRepository.findOne({ where: { id: roomId }, relations: ['owner'] });
+		return await this.chatRoomsRepository.findOne({ where: { id: roomId }, relations: ['owner'] });
 	}
 
 	@bindThis
@@ -811,7 +825,7 @@ export class ChatService {
 			reaction = normalizeEmojiString(reaction_);
 		} else {
 			const name = custom[1];
-			const emoji = (await this.customEmojiService.localEmojisCache.fetch()).get(name);
+			const emoji = await this.customEmojiService.emojisByKeyCache.fetchMaybe(name);
 
 			if (emoji == null) {
 				throw new Error('no such emoji');

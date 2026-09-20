@@ -11,11 +11,11 @@ import { bindThis } from '@/decorators.js';
 import Logger from '@/logger.js';
 import { LoggerService } from '@/core/LoggerService.js';
 import { StatusError } from '@/misc/status-error.js';
+import { TimeService } from '@/global/TimeService.js';
 import { IdentifiableError } from '@/misc/identifiable-error.js';
 import { CONTEXT, PRELOADED_CONTEXTS } from './misc/contexts.js';
 import { validateContentTypeSetAsJsonLD } from './misc/validator.js';
-import type { ContextDefinition, JsonLdDocument } from 'jsonld';
-import type { JsonLd as JsonLdObject, RemoteDocument } from 'jsonld/jsonld-spec.js';
+import type { ContextDefinition, NodeObject } from 'jsonld';
 
 // https://stackoverflow.com/a/66252656
 type RemoveIndex<T> = {
@@ -29,7 +29,8 @@ type RemoveIndex<T> = {
 	] : T[K];
 };
 
-export type Document = RemoveIndex<JsonLdDocument>;
+export type JsonLdObject = NodeObject | NodeObject[];
+export type Document = RemoveIndex<JsonLdObject>;
 
 export type Signature = {
 	id?: string;
@@ -74,6 +75,8 @@ export class JsonLd {
 
 	constructor(
 		private httpRequestService: HttpRequestService,
+		private readonly timeService: TimeService,
+
 		loggerService: LoggerService,
 	) {
 		this.logger = loggerService.getLogger('json-ld');
@@ -91,7 +94,7 @@ export class JsonLd {
 			type: 'RsaSignature2017',
 			creator,
 			nonce: crypto.randomBytes(16).toString('hex'),
-			created: (created ?? new Date()).toISOString(),
+			created: (created ?? this.timeService.date).toISOString(),
 		};
 
 		if (domain) {
@@ -149,7 +152,7 @@ export class JsonLd {
 		const customLoader = this.getLoader();
 		// XXX: Importing jsonld dynamically since Jest frequently fails to import it statically
 		// https://github.com/misskey-dev/misskey/pull/9894#discussion_r1103753595
-		return (await import('jsonld')).default.compact(data, context, {
+		return await (await import('jsonld')).default.compact(data, context, {
 			documentLoader: customLoader,
 		});
 	}
@@ -157,7 +160,7 @@ export class JsonLd {
 	@bindThis
 	public async normalize(data: Document): Promise<string> {
 		const customLoader = this.getLoader();
-		return (await import('jsonld')).default.normalize(data, {
+		return await (await import('jsonld')).default.normalize(data, {
 			documentLoader: customLoader,
 		});
 	}
@@ -185,7 +188,7 @@ export class JsonLd {
 
 	@bindThis
 	private getLoader() {
-		return async (url: string): Promise<RemoteDocument> => {
+		return async (url: string) => {
 			if (!/^https?:\/\//.test(url)) throw new UnrecoverableError(`Invalid URL: ${url}`);
 
 			{
@@ -245,13 +248,14 @@ export class JsonLd {
 export class JsonLdService {
 	constructor(
 		private httpRequestService: HttpRequestService,
+		private timeService: TimeService,
 		private loggerService: LoggerService,
 	) {
 	}
 
 	@bindThis
 	public use(): JsonLd {
-		return new JsonLd(this.httpRequestService, this.loggerService);
+		return new JsonLd(this.httpRequestService, this.timeService, this.loggerService);
 	}
 }
 

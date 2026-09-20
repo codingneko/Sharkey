@@ -21,9 +21,10 @@ import { IdService } from '@/core/IdService.js';
 import { NotificationService } from '@/core/NotificationService.js';
 import { JsonArrayStream } from '@/misc/JsonArrayStream.js';
 import { FileWriterStream } from '@/misc/FileWriterStream.js';
+import { TimeService } from '@/global/TimeService.js';
 import { QueueLoggerService } from '../QueueLoggerService.js';
 import type * as Bull from 'bullmq';
-import type { DbJobDataWithUser } from '../types.js';
+import type { DbExportNotesJobData } from '../types.js';
 
 class NoteStream extends ReadableStream<Record<string, unknown>> {
 	constructor(
@@ -114,12 +115,13 @@ export class ExportNotesProcessorService {
 		private driveFileEntityService: DriveFileEntityService,
 		private idService: IdService,
 		private notificationService: NotificationService,
+		private readonly timeService: TimeService,
 	) {
 		this.logger = this.queueLoggerService.logger.createSubLogger('export-notes');
 	}
 
 	@bindThis
-	public async process(job: Bull.Job<DbJobDataWithUser>): Promise<void> {
+	public async process(job: Bull.Job<DbExportNotesJobData>): Promise<void> {
 		const user = await this.usersRepository.findOneBy({ id: job.data.user.id });
 		if (user == null) {
 			this.logger.debug(`Skip: user ${job.data.user.id} does not exist`);
@@ -149,7 +151,7 @@ export class ExportNotesProcessorService {
 
 			this.logger.debug(`Exported to: ${path}`);
 
-			const fileName = 'notes-' + dateFormat(new Date(), 'yyyy-MM-dd-HH-mm-ss') + '.json';
+			const fileName = 'notes-' + dateFormat(this.timeService.date, 'yyyy-MM-dd-HH-mm-ss') + '.json';
 			const driveFile = await this.driveService.addFile({ user, path, name: fileName, force: true, ext: 'json' });
 
 			this.logger.debug(`Exported to: ${driveFile.id}`);

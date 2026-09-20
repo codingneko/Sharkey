@@ -3,12 +3,12 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
-import * as Redis from 'ioredis';
+import { Inject, Injectable } from '@nestjs/common';
 import type { MiMeta } from '@/models/_.js';
 import { DI } from '@/di-symbols.js';
-import { RedisKVCache } from '@/misc/cache.js';
 import { bindThis } from '@/decorators.js';
+import { CacheManagementService, type ManagedRedisKVCache } from '@/global/CacheManagementService.js';
+import { HttpRequestService } from '@/core/HttpRequestService.js';
 
 export interface Sponsor {
 	MemberId: number;
@@ -34,22 +34,22 @@ export interface Sponsor {
 }
 
 @Injectable()
-export class SponsorsService implements OnApplicationShutdown {
-	private readonly cache: RedisKVCache<Sponsor[]>;
+export class SponsorsService {
+	private readonly cache: ManagedRedisKVCache<Sponsor[]>;
 
 	constructor(
 		@Inject(DI.meta)
 		private readonly meta: MiMeta,
+		private readonly httpRequestService: HttpRequestService,
 
-		@Inject(DI.redis)
-		redisClient: Redis.Redis,
+		cacheManagementService: CacheManagementService,
 	) {
-		this.cache = new RedisKVCache<Sponsor[]>(redisClient, 'sponsors', {
+		this.cache = cacheManagementService.createRedisKVCache<Sponsor[]>('sponsors', {
 			lifetime: 1000 * 60 * 60,
 			memoryCacheLifetime: 1000 * 60,
-			fetcher: (key) => {
-				if (key === 'instance') return this.fetchInstanceSponsors();
-				return this.fetchSharkeySponsors();
+			fetcher: async (key) => {
+				if (key === 'instance') return await this.fetchInstanceSponsors();
+				return await this.fetchSharkeySponsors();
 			},
 			toRedisConverter: (value) => JSON.stringify(value),
 			fromRedisConverter: (value) => JSON.parse(value),
@@ -58,12 +58,12 @@ export class SponsorsService implements OnApplicationShutdown {
 
 	@bindThis
 	private async fetchInstanceSponsors(): Promise<Sponsor[]> {
-		if (!(this.meta.donationUrl && this.meta.donationUrl.includes('opencollective.com'))) {
+		if (!this.meta.donationUrl?.startsWith('https://opencollective.com')) {
 			return [];
 		}
 
 		try {
-			const backers = await fetch(`${this.meta.donationUrl}/members/users.json`).then((response) => response.json() as Promise<Sponsor[]>);
+			const backers = await this.httpRequestService.getJson<Sponsor[]>(`${this.meta.donationUrl}/members/users.json`);
 
 			// Merge both together into one array and make sure it only has Active subscriptions
 			const allSponsors = [...backers].filter(sponsor => sponsor.isActive && sponsor.role === 'BACKER' && sponsor.tier);
@@ -78,8 +78,8 @@ export class SponsorsService implements OnApplicationShutdown {
 	@bindThis
 	private async fetchSharkeySponsors(): Promise<Sponsor[]> {
 		try {
-			const backers = await fetch('https://opencollective.com/sharkey/tiers/backer/all.json').then((response) => response.json() as Promise<Sponsor[]>);
-			const sponsorsOC = await fetch('https://opencollective.com/sharkey/tiers/sponsor/all.json').then((response) => response.json() as Promise<Sponsor[]>);
+			const backers = await this.httpRequestService.getJson<Sponsor[]>('https://opencollective.com/sharkey/tiers/backer/all.json');
+			const sponsorsOC = await this.httpRequestService.getJson<Sponsor[]>('https://opencollective.com/sharkey/tiers/sponsor/all.json');
 
 			// Merge both together into one array and make sure it only has Active subscriptions
 			const allSponsors = [...sponsorsOC, ...backers].filter(sponsor => sponsor.isActive);
@@ -94,17 +94,12 @@ export class SponsorsService implements OnApplicationShutdown {
 	@bindThis
 	public async instanceSponsors(forceUpdate: boolean) {
 		if (forceUpdate) await this.cache.refresh('instance');
-		return this.cache.fetch('instance');
+		return await this.cache.fetch('instance');
 	}
 
 	@bindThis
 	public async sharkeySponsors(forceUpdate: boolean) {
 		if (forceUpdate) await this.cache.refresh('sharkey');
-		return this.cache.fetch('sharkey');
-	}
-
-	@bindThis
-	public onApplicationShutdown(): void {
-		this.cache.dispose();
+		return await this.cache.fetch('sharkey');
 	}
 }

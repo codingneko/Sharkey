@@ -3,12 +3,10 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-/// <reference lib="esnext" />
-
 import { parse as vueSfcParse } from 'vue/compiler-sfc';
 import {
 	createLogger,
-	EnvironmentModuleGraph,
+	type EnvironmentModuleGraph,
 	type LogErrorOptions,
 	type LogOptions,
 	normalizePath,
@@ -16,11 +14,11 @@ import {
 	type PluginOption
 } from 'vite';
 import fs from 'node:fs';
-import { glob } from 'glob';
+import fastGlob from 'fast-glob';
 import JSON5 from 'json5';
 import MagicString, { SourceMap } from 'magic-string';
 import path from 'node:path'
-import { hash, toBase62 } from '../vite.config';
+import { hash, toBase62 } from '../vite.config.js';
 import { minimatch } from 'minimatch';
 import {
 	type AttributeNode,
@@ -63,7 +61,7 @@ interface MarkerRelation {
 let logger = {
 	info: (msg: string, options?: LogOptions) => { },
 	warn: (msg: string, options?: LogOptions) => { },
-	error: (msg: string, options?: LogErrorOptions | unknown) => { },
+	error: (msg: string, options?: LogErrorOptions) => { },
 };
 let loggerInitialized = false;
 
@@ -470,7 +468,11 @@ export function collectFileMarkers(id: string, code: string): SearchIndexItem[] 
 
 		return extractUsageInfoFromTemplateAst(descriptor.template?.ast, id);
 	} catch (error) {
-		logger.error(`Error analyzing file ${id}:`, error);
+		logger.error(`Error analyzing file ${id}:`, {
+			error: error instanceof Error
+				? error
+				: new Error(`Unknown error of type ${typeof(error)}`, { cause: error }),
+		});
 	}
 
 	return [];
@@ -720,7 +722,7 @@ export function pluginCreateSearchIndexVirtualModule(options: Options, asigner: 
 
 		async load(id) {
 			if (id == '\0' + allSearchIndexFile) {
-				const files = await Promise.all(options.targetFilePaths.map(async (filePathPattern) => await glob(filePathPattern))).then(paths => paths.flat());
+				const files = await Promise.all(options.targetFilePaths.map(async (filePathPattern) => await fastGlob.glob(filePathPattern))).then(paths => paths.flat());
 				let generatedFile = '';
 				let arrayElements = '';
 				for (let file of files) {

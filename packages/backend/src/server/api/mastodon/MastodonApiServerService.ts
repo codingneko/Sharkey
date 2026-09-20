@@ -5,6 +5,7 @@
 
 import { Injectable } from '@nestjs/common';
 import { bindThis } from '@/decorators.js';
+import { promiseMap } from '@/misc/promise-map.js';
 import { getErrorData, getErrorException, getErrorStatus, MastodonLogger } from '@/server/api/mastodon/MastodonLogger.js';
 import { MastodonClientService } from '@/server/api/mastodon/MastodonClientService.js';
 import { ApiAccountMastodon } from '@/server/api/mastodon/endpoints/account.js';
@@ -71,10 +72,12 @@ export class MastodonApiServerService {
 			done();
 		});
 
-		// Tell crawlers not to index API endpoints.
-		// https://developers.google.com/search/docs/crawling-indexing/block-indexing
 		fastify.addHook('onRequest', (request, reply, done) => {
+			// Tell crawlers not to index API endpoints.
+			// https://developers.google.com/search/docs/crawling-indexing/block-indexing
 			reply.header('X-Robots-Tag', 'noindex');
+			// Prevent cache
+			reply.header('Cache-Control', 'private, max-age=0, must-revalidate');
 			done();
 		});
 
@@ -117,8 +120,12 @@ export class MastodonApiServerService {
 				return reply.code(400).send({ error: 'BAD_REQUEST', error_description: 'No image' });
 			}
 
+			const buffer = await multipartData.toBuffer();
+			const file = new File([buffer], multipartData.fieldname, {
+				type: multipartData.mimetype,
+			});
 			const client = this.clientService.getClient(_request);
-			const data = await client.uploadMedia(multipartData);
+			const data = await client.uploadMedia(file);
 			const response = convertAttachment(data.data as Entity.Attachment);
 
 			return reply.send(response);
@@ -129,9 +136,13 @@ export class MastodonApiServerService {
 			if (!multipartData) {
 				return reply.code(400).send({ error: 'BAD_REQUEST', error_description: 'No image' });
 			}
+			const buffer = await multipartData.toBuffer();
+			const file = new File([buffer], multipartData.fieldname, {
+				type: multipartData.mimetype,
+			});
 
 			const client = this.clientService.getClient(_request);
-			const data = await client.uploadMedia(multipartData, _request.body);
+			const data = await client.uploadMedia(file, _request.body);
 			const response = convertAttachment(data.data as Entity.Attachment);
 
 			return reply.send(response);
@@ -170,7 +181,7 @@ export class MastodonApiServerService {
 			const { client, me } = await this.clientService.getAuthClient(_request);
 
 			const data = await client.getBookmarks(parseTimelineArgs(_request.query));
-			const response = await Promise.all(data.data.map((status) => this.mastoConverters.convertStatus(status, me)));
+			const response = await promiseMap(data.data, async (status) => await this.mastoConverters.convertStatus(status, me), { limiter: 4 });
 
 			return reply.send(response);
 		});
@@ -192,7 +203,7 @@ export class MastodonApiServerService {
 				userId: me.id,
 			};
 			const data = await client.getFavourites(args);
-			const response = await Promise.all(data.data.map((status) => this.mastoConverters.convertStatus(status, me)));
+			const response = await promiseMap(data.data, async (status) => await this.mastoConverters.convertStatus(status, me), { limiter: 4 });
 
 			return reply.send(response);
 		});
@@ -201,7 +212,7 @@ export class MastodonApiServerService {
 			const client = this.clientService.getClient(_request);
 
 			const data = await client.getMutes(parseTimelineArgs(_request.query));
-			const response = await Promise.all(data.data.map((account) => this.mastoConverters.convertAccount(account)));
+			const response = await promiseMap(data.data, async (account) => await this.mastoConverters.convertAccount(account), { limiter: 4 });
 
 			return reply.send(response);
 		});
@@ -210,7 +221,7 @@ export class MastodonApiServerService {
 			const client = this.clientService.getClient(_request);
 
 			const data = await client.getBlocks(parseTimelineArgs(_request.query));
-			const response = await Promise.all(data.data.map((account) => this.mastoConverters.convertAccount(account)));
+			const response = await promiseMap(data.data, async (account) => await this.mastoConverters.convertAccount(account), { limiter: 4 });
 
 			return reply.send(response);
 		});
@@ -220,7 +231,7 @@ export class MastodonApiServerService {
 
 			const limit = _request.query.limit ? parseInt(_request.query.limit) : 20;
 			const data = await client.getFollowRequests(limit);
-			const response = await Promise.all(data.data.map((account) => this.mastoConverters.convertAccount(account as Entity.Account)));
+			const response = await promiseMap(data.data, async (account) => await this.mastoConverters.convertAccount(account), { limiter: 4 });
 
 			return reply.send(response);
 		});

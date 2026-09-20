@@ -3,9 +3,9 @@ import tsParser from '@typescript-eslint/parser';
 import parser from 'vue-eslint-parser';
 import pluginVue from 'eslint-plugin-vue';
 import pluginMisskey from '@misskey-dev/eslint-plugin';
+import { build as buildLocales } from 'locales';
 import sharedConfig from '../shared/eslint.config.js';
-import localeRule from '../../eslint/locale.js';
-import { build as buildLocales } from '../../locales/index.js';
+import localeRule from '../shared/eslint/locale-eslint-rule.js';
 
 export default [
 	...sharedConfig,
@@ -15,7 +15,7 @@ export default [
 	},
 	...pluginVue.configs['flat/recommended'],
 	{
-		files: ['{src,test,js,@types}/**/*.{ts,vue}'],
+		files: ['{src,test,js,@types}/**/*.{ts,vue}', 'vue-shims.d.ts'],
 		plugins: { sharkey: { rules: { locale: localeRule } } },
 		languageOptions: {
 			globals: {
@@ -41,7 +41,7 @@ export default [
 			parserOptions: {
 				extraFileExtensions: ['.vue'],
 				parser: tsParser,
-				project: ['./tsconfig.json'],
+				project: ['tsconfig.vue.json'],
 				sourceType: 'module',
 				tsconfigRootDir: import.meta.dirname,
 			},
@@ -52,7 +52,6 @@ export default [
 			'@typescript-eslint/no-empty-interface': ['error', {
 				allowSingleExtends: true,
 			}],
-			'import/consistent-type-specifier-style': ['error', 'prefer-top-level'],
 			// window の禁止理由: グローバルスコープと衝突し、予期せぬ結果を招くため
 			// e の禁止理由: error や event など、複数のキーワードの頭文字であり分かりにくいため
 			'id-denylist': ['error', 'window', 'e'],
@@ -99,12 +98,47 @@ export default [
 		},
 	},
 	{
+		files: [
+			'*.js',
+			'*.ts',
+			'lib/**/*.ts',
+			'lib/**/*.js',
+			'scripts/**/*.ts',
+			'scripts/**/*.js',
+			'scripts/**/*.mjs',
+			'scripts/**/*.cjs',
+		],
 		ignores: [
-			"**/lib/",
-			"**/temp/",
-			"**/built/",
-			"**/coverage/",
-			"**/node_modules/",
-		]
+			'node_modules',
+			'vue-shims.d.ts',
+			'src',
+			'test',
+			'@types',
+			'assets',
+		],
+		languageOptions: {
+			globals: {
+				...globals.node,
+			},
+			parserOptions: {
+				parser: tsParser,
+				project: ['tsconfig.scripts.json'],
+				sourceType: 'module',
+				tsconfigRootDir: import.meta.dirname,
+			},
+		},
+		rules: {
+			'import/no-default-export': 'off',
+		},
+	},
+	{
+		ignores: [
+			'**/lib/',
+			'**/temp/',
+			'**/built/',
+			'**/coverage/',
+			'**/node_modules/',
+			'vue-shims.d.ts',
+		],
 	},
 ];

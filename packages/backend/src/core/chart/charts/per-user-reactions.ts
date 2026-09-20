@@ -6,8 +6,10 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import type { MiUser } from '@/models/User.js';
+import { isLocalUser } from '@/models/User.js';
 import type { MiNote } from '@/models/Note.js';
 import { AppLockService } from '@/core/AppLockService.js';
+import { TimeService } from '@/global/TimeService.js';
 import { DI } from '@/di-symbols.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import { bindThis } from '@/decorators.js';
@@ -28,8 +30,13 @@ export default class PerUserReactionsChart extends Chart<typeof schema> { // esl
 		private appLockService: AppLockService,
 		private userEntityService: UserEntityService,
 		private chartLoggerService: ChartLoggerService,
+		private readonly timeService: TimeService,
 	) {
 		super(db, (k) => appLockService.getChartInsertLock(k), chartLoggerService.logger, name, schema, true);
+	}
+
+	protected getCurrentDate(): Date {
+		return this.timeService.date;
 	}
 
 	protected async tickMajor(group: string): Promise<Partial<KVs<typeof schema>>> {
@@ -41,8 +48,8 @@ export default class PerUserReactionsChart extends Chart<typeof schema> { // esl
 	}
 
 	@bindThis
-	public async update(user: { id: MiUser['id'], host: MiUser['host'] }, note: MiNote): Promise<void> {
-		const prefix = this.userEntityService.isLocalUser(user) ? 'local' : 'remote';
+	public update(user: { id: MiUser['id'], host: MiUser['host'] }, note: MiNote): void {
+		const prefix = isLocalUser(user) ? 'local' : 'remote';
 		this.commit({
 			[`${prefix}.count`]: 1,
 		}, note.userId);

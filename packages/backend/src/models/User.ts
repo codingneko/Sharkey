@@ -28,6 +28,11 @@ export class MiUser {
 	})
 	public lastFetchedAt: Date | null;
 
+	@Column('timestamp with time zone', {
+		nullable: true,
+	})
+	public lastFetchedFeaturedAt?: Date | null;
+
 	@Index()
 	@Column('timestamp with time zone', {
 		nullable: true,
@@ -50,7 +55,7 @@ export class MiUser {
 		length: 128, select: false,
 		comment: 'The username (lowercased) of the User.',
 	})
-	public usernameLower: string;
+	public usernameLower?: string;
 
 	@Column('varchar', {
 		length: 128, nullable: true,
@@ -138,18 +143,18 @@ export class MiUser {
 
 	// avatarId が null になったとしてもこれが null でない可能性があるため、このフィールドを使うときは avatarId の non-null チェックをすること
 	@Column('varchar', {
-		length: 512, nullable: true,
+		length: 1024, nullable: true,
 	})
 	public avatarUrl: string | null;
 
 	// bannerId が null になったとしてもこれが null でない可能性があるため、このフィールドを使うときは bannerId の non-null チェックをすること
 	@Column('varchar', {
-		length: 512, nullable: true,
+		length: 1024, nullable: true,
 	})
 	public bannerUrl: string | null;
 
 	@Column('varchar', {
-		length: 512, nullable: true,
+		length: 1024, nullable: true,
 	})
 	public backgroundUrl: string | null;
 
@@ -270,6 +275,12 @@ export class MiUser {
 		comment: 'Whether the User is deleted.',
 	})
 	public isDeleted: boolean;
+
+	@Column('timestamp with time zone', {
+		nullable: true,
+		comment: 'When the account was deleted.',
+	})
+	public deletedAt: Date | null;
 
 	@Column('varchar', {
 		length: 128, array: true, default: '{}',
@@ -430,10 +441,28 @@ export type MiPartialRemoteUser = Partial<MiUser> & {
 	uri: string;
 };
 
+export type MiPartialUser = Partial<MiUser> & Pick<MiUser, 'id' | 'host' | 'uri'>;
+
+export function isRemoteUser(user: MiUser): user is MiRemoteUser;
+export function isRemoteUser<U extends PartialUser>(user: U): user is PartialRemoteUser<U>;
+export function isRemoteUser(user: { host: string | null }): user is { host: string } {
+	return user.host != null;
+}
+
+export function isLocalUser(user: MiUser): user is MiLocalUser;
+export function isLocalUser<U extends PartialUser>(user: U): user is PartialLocalUser<U>;
+export function isLocalUser(user: { host: string | null }): user is { host: null } {
+	return user.host == null;
+}
+
+type PartialUser = Partial<MiUser> & { host: string | null, uri?: string | null };
+type PartialLocalUser<U extends PartialUser> = U & { host: null, uri?: null };
+type PartialRemoteUser<U extends PartialUser> = U & { host: string, uri?: string };
+
 export const localUsernameSchema = { type: 'string', pattern: /^\w{1,20}$/.toString().slice(1, -1) } as const;
 export const passwordSchema = { type: 'string', minLength: 1 } as const;
 export const nameSchema = { type: 'string', minLength: 1, maxLength: 50 } as const;
-export const descriptionSchema = { type: 'string', minLength: 1, maxLength: 1500 } as const;
+export const descriptionSchema = { type: 'string', minLength: 1 } as const;
 export const followedMessageSchema = { type: 'string', minLength: 1, maxLength: 256 } as const;
 export const locationSchema = { type: 'string', minLength: 1, maxLength: 50 } as const;
 export const listenbrainzSchema = { type: 'string', minLength: 1, maxLength: 128 } as const;

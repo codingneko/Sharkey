@@ -7,9 +7,8 @@
 
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
-import locales from '../../locales/index.js';
+import { locales, localesVersion } from 'locales';
 import meta from '../../package.json' with { type: 'json' };
-import { localesVersion } from '../../locales/version.js';
 const watch = process.argv[2]?.includes('watch');
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -37,7 +36,7 @@ const buildOptions = {
 	outbase: `${__dirname}/src`,
 	outdir: `${__dirname}/../../built/_sw_dist_`,
 	treeShaking: true,
-	tsconfig: `${__dirname}/tsconfig.json`,
+	tsconfig: `${__dirname}/tsconfig.sw.json`,
 };
 
 (async () => {

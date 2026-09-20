@@ -9,7 +9,9 @@ import { DataSource, Logger, type QueryRunner } from 'typeorm';
 import * as highlight from 'cli-highlight';
 import { entities as charts } from '@/core/chart/entities.js';
 import { Config } from '@/config.js';
-import MisskeyLogger from '@/logger.js';
+import type MisskeyLogger from '@/logger.js';
+import type { Data } from '@/logger.js';
+import type { EnvService } from '@/global/EnvService.js';
 import { bindThis } from '@/decorators.js';
 
 import { MiAbuseUserReport } from '@/models/AbuseUserReport.js';
@@ -92,14 +94,13 @@ import { SkLatestNote } from '@/models/LatestNote.js';
 import { SkApContext } from '@/models/SkApContext.js';
 import { SkApFetchLog } from '@/models/SkApFetchLog.js';
 import { SkApInboxLog } from '@/models/SkApInboxLog.js';
+import { coreEnvService, coreLogger } from '@/boot/coreLogger.js';
 
-pg.types.setTypeParser(20, Number);
+// Types are incorrect - TypeId is not a real enum and therefore does not exist at runtime.
+// This construction defines the value by hand, but still allows TypeScript to verify it.
+const INT8: typeof pg.types.TypeId.INT8 = 20;
 
-export const dbLogger = new MisskeyLogger('db');
-
-const sqlLogger = dbLogger.createSubLogger('sql', 'gray');
-const sqlMigrateLogger = sqlLogger.createSubLogger('migrate');
-const sqlSchemaLogger = sqlLogger.createSubLogger('schema');
+pg.types.setTypeParser(INT8, Number);
 
 export type LoggerProps = {
 	disableQueryTruncation?: boolean;
@@ -118,16 +119,26 @@ function truncateSql(sql: string) {
 	return sql.length > 100 ? `${sql.substring(0, 100)} [truncated]` : sql;
 }
 
-function stringifyParameter(param: any) {
+function stringifyParameter(param: unknown): string {
 	if (param instanceof Date) {
 		return param.toISOString();
 	} else {
-		return param;
+		return String(param);
 	}
 }
 
-class MyCustomLogger implements Logger {
-	constructor(private props: LoggerProps = {}) {
+class TypeORMLogger implements Logger {
+	private readonly sqlLogger: MisskeyLogger;
+	private readonly sqlMigrateLogger: MisskeyLogger;
+	private readonly sqlSchemaLogger: MisskeyLogger;
+
+	constructor(
+		private readonly props: LoggerProps = {},
+		dbLogger: MisskeyLogger,
+	) {
+		this.sqlLogger = dbLogger.createSubLogger('sql', 'gray');
+		this.sqlMigrateLogger = this.sqlLogger.createSubLogger('migrate');
+		this.sqlSchemaLogger = this.sqlLogger.createSubLogger('schema');
 	}
 
 	@bindThis
@@ -143,9 +154,9 @@ class MyCustomLogger implements Logger {
 	}
 
 	@bindThis
-	private transformParameters(parameters?: any[]) {
+	private transformParameters(parameters?: unknown[]): Data | undefined {
 		if (this.props.enableQueryParamLogging && parameters && parameters.length > 0) {
-			return parameters.reduce((params, p, i) => {
+			return parameters.reduce<Record<string, string>>((params: Record<string, string>, p, i) => {
 				params[`$${i + 1}`] = stringifyParameter(p);
 				return params;
 			}, {} as Record<string, string>);
@@ -155,37 +166,37 @@ class MyCustomLogger implements Logger {
 	}
 
 	@bindThis
-	public logQuery(query: string, parameters?: any[], queryRunner?: QueryRunner) {
+	public logQuery(query: string, parameters?: unknown[], queryRunner?: QueryRunner) {
 		if (!this.props.enableQueryLogging) return;
 
 		const prefix = (this.props.printReplicationMode && queryRunner)
 			? `[${queryRunner.getReplicationMode()}] `
 			: undefined;
 		const transformed = this.transformQueryLog(query, { prefix });
-		sqlLogger.debug(`Query run: ${transformed}`, this.transformParameters(parameters));
+		this.sqlLogger.debug(`Query run: ${transformed}`, this.transformParameters(parameters));
 	}
 
 	@bindThis
-	public logQueryError(error: string, query: string, parameters?: any[], queryRunner?: QueryRunner) {
+	public logQueryError(error: string, query: string, parameters?: unknown[], queryRunner?: QueryRunner) {
 		const prefix = (this.props.printReplicationMode && queryRunner)
 			? `[${queryRunner.getReplicationMode()}] `
 			: undefined;
 		const transformed = this.transformQueryLog(query, { prefix });
-		sqlLogger.error(`Query error (${error}): ${transformed}`, this.transformParameters(parameters));
+		this.sqlLogger.error(`Query error (${error}): ${transformed}`, this.transformParameters(parameters));
 	}
 
 	@bindThis
-	public logQuerySlow(time: number, query: string, parameters?: any[], queryRunner?: QueryRunner) {
+	public logQuerySlow(time: number, query: string, parameters?: unknown[], queryRunner?: QueryRunner) {
 		const prefix = (this.props.printReplicationMode && queryRunner)
 			? `[${queryRunner.getReplicationMode()}] `
 			: undefined;
 		const transformed = this.transformQueryLog(query, { prefix });
-		sqlLogger.warn(`Query is slow (${time}ms): ${transformed}`, this.transformParameters(parameters));
+		this.sqlLogger.warn(`Query is slow (${time}ms): ${transformed}`, this.transformParameters(parameters));
 	}
 
 	@bindThis
 	public logSchemaBuild(message: string) {
-		sqlSchemaLogger.debug(message);
+		this.sqlSchemaLogger.debug(message);
 	}
 
 	@bindThis
@@ -193,18 +204,18 @@ class MyCustomLogger implements Logger {
 		switch (level) {
 			case 'log':
 			case 'info': {
-				sqlLogger.info(message);
+				this.sqlLogger.info(message);
 				break;
 			}
 			case 'warn': {
-				sqlLogger.warn(message);
+				this.sqlLogger.warn(message);
 			}
 		}
 	}
 
 	@bindThis
 	public logMigration(message: string) {
-		sqlMigrateLogger.debug(message);
+		this.sqlMigrateLogger.debug(message);
 	}
 }
 
@@ -292,9 +303,14 @@ export const entities = [
 	...charts,
 ];
 
-const log = process.env.NODE_ENV !== 'production';
+export function createPostgresDataSource(config: Config, globalLogger?: MisskeyLogger, envService?: EnvService) {
+	envService ??= coreEnvService;
+	globalLogger ??= coreLogger.createSubLogger('global');
 
-export function createPostgresDataSource(config: Config) {
+	const log = envService.env.NODE_ENV !== 'production' && !envService.options.quiet;
+	const verbose = envService.options.verbose;
+
+	const dbLogger = globalLogger.createSubLogger('db');
 	return new DataSource({
 		type: 'postgres',
 		host: config.db.host,
@@ -315,18 +331,18 @@ export function createPostgresDataSource(config: Config) {
 					password: config.db.pass,
 					database: config.db.db,
 				},
-				slaves: config.dbSlaves!.map(rep => ({
+				slaves: config.dbSlaves?.map(rep => ({
 					host: rep.host,
 					port: rep.port,
 					username: rep.user,
 					password: rep.pass,
 					database: rep.db,
-				})),
+				})) ?? [],
 			},
 		} : {}),
-		synchronize: process.env.NODE_ENV === 'test',
-		dropSchema: process.env.NODE_ENV === 'test',
-		cache: config.db.disableCache === false && process.env.NODE_ENV !== 'test' ? { // dbをcloseしても何故かredisのコネクションが内部的に残り続けるようで、テストの際に支障が出るため無効にする(キャッシュも含めてテストしたいため本当は有効にしたいが...)
+		synchronize: envService.env.NODE_ENV === 'test',
+		dropSchema: envService.env.NODE_ENV === 'test',
+		cache: config.db.disableCache === false && envService.env.NODE_ENV !== 'test' ? { // dbをcloseしても何故かredisのコネクションが内部的に残り続けるようで、テストの際に支障が出るため無効にする(キャッシュも含めてテストしたいため本当は有効にしたいが...)
 			type: 'ioredis',
 			options: {
 				...config.redis,
@@ -334,14 +350,15 @@ export function createPostgresDataSource(config: Config) {
 			},
 		} : false,
 		logging: log,
-		logger: new MyCustomLogger({
-			disableQueryTruncation: config.logging?.sql?.disableQueryTruncation,
+		logger: new TypeORMLogger({
+			disableQueryTruncation: config.logging?.sql?.disableQueryTruncation ?? verbose,
 			enableQueryLogging: log,
-			enableQueryParamLogging: config.logging?.sql?.enableQueryParamLogging,
+			enableQueryParamLogging: config.logging?.sql?.enableQueryParamLogging ?? verbose,
 			printReplicationMode: !!config.dbReplications,
-		}),
+		}, dbLogger),
 		maxQueryExecutionTime: config.db.slowQueryThreshold,
 		entities: entities,
+		// TODO only pass this when running migrations
 		migrations: ['../../migration/*.js'],
 	});
 }

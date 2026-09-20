@@ -4,29 +4,20 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
-import { Not, IsNull, DataSource } from 'typeorm';
-import type { FollowingsRepository, FollowRequestsRepository, UsersRepository } from '@/models/_.js';
-import { MiUser } from '@/models/User.js';
+import { Not, IsNull, type DataSource } from 'typeorm';
+import type { MiUser, FollowingsRepository, UsersRepository } from '@/models/_.js';
 import { QueueService } from '@/core/QueueService.js';
-import { GlobalEventService } from '@/core/GlobalEventService.js';
 import { DI } from '@/di-symbols.js';
 import { ApRendererService } from '@/core/activitypub/ApRendererService.js';
 import { UserEntityService } from '@/core/entities/UserEntityService.js';
 import { bindThis } from '@/decorators.js';
+import { isSystemAccount } from '@/misc/is-system-account.js';
 import { RelationshipJobData } from '@/queue/types.js';
 import { ModerationLogService } from '@/core/ModerationLogService.js';
-import { isSystemAccount } from '@/misc/is-system-account.js';
-import { CacheService } from '@/core/CacheService.js';
-import { LoggerService } from '@/core/LoggerService.js';
-import type Logger from '@/logger.js';
-import { renderInlineError } from '@/misc/render-inline-error.js';
-import { trackPromise } from '@/misc/promise-tracker.js';
-import { InternalEventService } from '@/core/InternalEventService.js';
+import { InternalEventService } from '@/global/InternalEventService.js';
 
 @Injectable()
 export class UserSuspendService {
-	private readonly logger: Logger;
-
 	constructor(
 		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
@@ -34,24 +25,15 @@ export class UserSuspendService {
 		@Inject(DI.followingsRepository)
 		private followingsRepository: FollowingsRepository,
 
-		@Inject(DI.followRequestsRepository)
-		private followRequestsRepository: FollowRequestsRepository,
-
 		@Inject(DI.db)
 		private db: DataSource,
 
 		private userEntityService: UserEntityService,
 		private queueService: QueueService,
-		private globalEventService: GlobalEventService,
 		private apRendererService: ApRendererService,
 		private moderationLogService: ModerationLogService,
-		private readonly cacheService: CacheService,
 		private readonly internalEventService: InternalEventService,
-
-		loggerService: LoggerService,
-	) {
-		this.logger = loggerService.getLogger('user-suspend');
-	}
+	) {}
 
 	@bindThis
 	public async suspend(user: MiUser, moderator: MiUser): Promise<void> {
@@ -69,10 +51,7 @@ export class UserSuspendService {
 			userHost: user.host,
 		});
 
-		trackPromise((async () => {
-			await this.postSuspend(user);
-			await this.freezeAll(user);
-		})().catch(e => this.logger.error(`Error suspending user ${user.id}: ${renderInlineError(e)}`)));
+		await this.queueService.createPostSuspendJob(user.id);
 	}
 
 	@bindThis
@@ -89,15 +68,12 @@ export class UserSuspendService {
 			userHost: user.host,
 		});
 
-		trackPromise((async () => {
-			await this.postUnsuspend(user);
-			await this.unFreezeAll(user);
-		})().catch(e => this.logger.error(`Error un-suspending for user ${user.id}: ${renderInlineError(e)}`)));
+		await this.queueService.createPostUnsuspendJob(user.id);
 	}
 
 	@bindThis
-	private async postSuspend(user: { id: MiUser['id']; host: MiUser['host'] }): Promise<void> {
-		this.globalEventService.publishInternalEvent('userChangeSuspendedState', { id: user.id, isSuspended: true });
+	public async postSuspend(user: MiUser): Promise<void> {
+		await this.internalEventService.emit('userChangeSuspendedState', { id: user.id, isSuspended: true });
 
 		/*
 		this.followRequestsRepository.delete({
@@ -132,11 +108,13 @@ export class UserSuspendService {
 
 			await this.queueService.deliverMany(user, content, queue);
 		}
+
+		await this.freezeAll(user);
 	}
 
 	@bindThis
-	private async postUnsuspend(user: MiUser): Promise<void> {
-		this.globalEventService.publishInternalEvent('userChangeSuspendedState', { id: user.id, isSuspended: false });
+	public async postUnsuspend(user: MiUser): Promise<void> {
+		await this.internalEventService.emit('userChangeSuspendedState', { id: user.id, isSuspended: false });
 
 		if (this.userEntityService.isLocalUser(user)) {
 			// 知り得る全SharedInboxにUndo Delete配信
@@ -162,24 +140,28 @@ export class UserSuspendService {
 
 			await this.queueService.deliverMany(user, content, queue);
 		}
+
+		await this.unFreezeAll(user);
 	}
 
 	@bindThis
 	private async unFollowAll(follower: MiUser) {
-		const followings = await this.cacheService.userFollowingsCache.fetch(follower.id)
-			.then(fs => Array.from(fs.values()).filter(f => f.followeeHost != null));
+		const followings = await this.followingsRepository.find({
+			where: { followerId: follower.id, followeeHost: Not(IsNull()) },
+			select: { followerId: true },
+		});
 
-		const jobs: RelationshipJobData[] = [];
+		const jobs: Omit<RelationshipJobData, 'type'>[] = [];
 		for (const following of followings) {
-			if (following.followeeId && following.followerId) {
+			if (following.followeeId) {
 				jobs.push({
-					from: { id: following.followerId },
+					from: { id: follower.id },
 					to: { id: following.followeeId },
 					silent: true,
 				});
 			}
 		}
-		this.queueService.createUnfollowJob(jobs);
+		await this.queueService.createUnfollowJob(jobs);
 	}
 
 	@bindThis

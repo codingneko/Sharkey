@@ -8,7 +8,7 @@ import type { Packed } from '@/misc/json-schema.js';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { bindThis } from '@/decorators.js';
 import { RoleService } from '@/core/RoleService.js';
-import { isQuotePacked, isRenotePacked } from '@/misc/is-renote.js';
+import { isPackedPureRenote } from '@/misc/is-renote.js';
 import { isReply } from '@/misc/is-reply.js';
 import type { JsonObject } from '@/misc/json-value.js';
 import { type Channel, NoteChannel, type MiChannelService } from '../channel.js';
@@ -34,7 +34,7 @@ class LocalTimelineChannel extends NoteChannel {
 
 	@bindThis
 	public async init(params: JsonObject) {
-		const policies = await this.roleService.getUserPolicies(this.user ? this.user.id : null);
+		const policies = await this.roleService.getUserPolicies(this.user);
 		if (!policies.ltlAvailable) return;
 
 		this.withRenotes = !!(params.withRenotes ?? true);
@@ -52,7 +52,7 @@ class LocalTimelineChannel extends NoteChannel {
 		if (note.channelId != null) return;
 		if (this.withFiles && (note.fileIds == null || note.fileIds.length === 0)) return;
 		if (!this.withBots && note.user.isBot) return;
-		if (!this.withRenotes && isRenotePacked(note) && !isQuotePacked(note)) return;
+		if (!this.withRenotes && isPackedPureRenote(note)) return;
 		if (!this.withReplies && isReply(note)) return;
 
 		const preparedNote = await this.prepareNote(note);

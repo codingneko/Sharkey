@@ -42,6 +42,7 @@ export class GalleryPostEntityService {
 		const meId = me ? me.id : null;
 		const post = typeof src === 'object' ? src : await this.galleryPostsRepository.findOneByOrFail({ id: src });
 
+		// noinspection ES6MissingAwait
 		return await awaitAll({
 			id: post.id,
 			createdAt: this.idService.parse(post.id).date.toISOString(),
@@ -56,7 +57,7 @@ export class GalleryPostEntityService {
 			tags: post.tags.length > 0 ? post.tags : undefined,
 			isSensitive: post.isSensitive,
 			likedCount: post.likedCount,
-			isLiked: meId ? await this.galleryLikesRepository.exists({ where: { postId: post.id, userId: meId } }) : undefined,
+			isLiked: meId ? this.galleryLikesRepository.exists({ where: { postId: post.id, userId: meId } }) : undefined,
 		});
 	}
 
@@ -68,7 +69,7 @@ export class GalleryPostEntityService {
 		const _users = posts.map(({ user, userId }) => user ?? userId);
 		const _userMap = await this.userEntityService.packMany(_users, me)
 			.then(users => new Map(users.map(u => [u.id, u])));
-		return Promise.all(posts.map(post => this.pack(post, me, { packedUser: _userMap.get(post.userId) })));
+		return await Promise.all(posts.map(post => this.pack(post, me, { packedUser: _userMap.get(post.userId) })));
 	}
 }
 

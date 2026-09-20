@@ -12,10 +12,12 @@ import { GetterService } from '@/server/api/GetterService.js';
 import { RoleService } from '@/core/RoleService.js';
 import type { MiMeta, MiNote } from '@/models/_.js';
 import { DI } from '@/di-symbols.js';
-import { CacheService } from '@/core/CacheService.js';
 import { hasText } from '@/models/Note.js';
 import { ApiLoggerService } from '@/server/api/ApiLoggerService.js';
-import { ApiError } from '../../error.js';
+import { NoteVisibilityService } from '@/core/NoteVisibilityService.js';
+import { CacheManagementService, type ManagedRedisKVCache } from '@/global/CacheManagementService.js';
+import { ApiError } from '@/server/api/error.js';
+import { bindThis } from '@/decorators.js';
 
 export const meta = {
 	tags: ['notes'],
@@ -74,6 +76,8 @@ export const paramDef = {
 
 @Injectable()
 export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
+	private readonly translationsCache: ManagedRedisKVCache<CachedTranslationEntity>;
+
 	constructor(
 		@Inject(DI.meta)
 		private serverSettings: MiMeta,
@@ -82,8 +86,10 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 		private getterService: GetterService,
 		private httpRequestService: HttpRequestService,
 		private roleService: RoleService,
-		private readonly cacheService: CacheService,
 		private readonly loggerService: ApiLoggerService,
+		private readonly noteVisibilityService: NoteVisibilityService,
+
+		cacheManagementService: CacheManagementService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
 			const note = await this.getterService.getNote(ps.noteId).catch(err => {
@@ -91,7 +97,8 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 				throw err;
 			});
 
-			if (!(await this.noteEntityService.isVisibleForMe(note, me?.id ?? null, { me }))) {
+			const { accessible } = await this.noteVisibilityService.checkNoteVisibilityAsync(note, me);
+			if (!accessible) {
 				throw new ApiError(meta.errors.cannotTranslateInvisibleNote);
 			}
 
@@ -107,7 +114,7 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 			let targetLang = ps.targetLang;
 			if (targetLang.includes('-')) targetLang = targetLang.split('-')[0];
 
-			let response = await this.cacheService.getCachedTranslation(note, targetLang);
+			let response = await this.getCachedTranslation(note, targetLang);
 			if (!response) {
 				this.loggerService.logger.debug(`Fetching new translation for note=${note.id} lang=${targetLang}`);
 				response = await this.fetchTranslation(note, targetLang);
@@ -115,9 +122,14 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 					throw new ApiError(meta.errors.translationFailed);
 				}
 
-				await this.cacheService.setCachedTranslation(note, targetLang, response);
+				await this.setCachedTranslation(note, targetLang, response);
 			}
 			return response;
+		});
+
+		this.translationsCache = cacheManagementService.createRedisKVCache<CachedTranslationEntity>('translations', {
+			lifetime: 1000 * 60 * 60 * 24 * 7, // 1 week,
+			memoryCacheLifetime: 1000 * 60, // 1 minute
 		});
 	}
 
@@ -217,4 +229,43 @@ export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-
 
 		return null;
 	}
+
+	@bindThis
+	private async getCachedTranslation(note: MiNote, targetLang: string): Promise<CachedTranslation | null> {
+		const cacheKey = `${note.id}@${targetLang}`;
+
+		// Use cached translation, if present and up-to-date
+		const cached = await this.translationsCache.get(cacheKey);
+		if (cached && cached.u === note.updatedAt?.valueOf()) {
+			return {
+				sourceLang: cached.l,
+				text: cached.t,
+			};
+		}
+
+		// No cache entry :(
+		return null;
+	}
+
+	@bindThis
+	private async setCachedTranslation(note: MiNote, targetLang: string, translation: CachedTranslation): Promise<void> {
+		const cacheKey = `${note.id}@${targetLang}`;
+
+		await this.translationsCache.set(cacheKey, {
+			l: translation.sourceLang,
+			t: translation.text,
+			u: note.updatedAt?.valueOf(),
+		});
+	}
+}
+
+interface CachedTranslation {
+	sourceLang: string | undefined;
+	text: string | undefined;
+}
+
+interface CachedTranslationEntity {
+	l?: string;
+	t?: string;
+	u?: number;
 }

@@ -3,31 +3,32 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import * as esbuild from 'esbuild';
 import { build } from 'esbuild';
-import { globSync } from 'glob';
+import fastGlob from 'fast-glob';
 import { execa } from 'execa';
 
 const _filename = fileURLToPath(import.meta.url);
 const _dirname = dirname(_filename);
 const _package = JSON.parse(fs.readFileSync(_dirname + '/package.json', 'utf-8'));
 
-const entryPoints = globSync('./js/**/**.{ts,tsx}');
+const entryPoints = fastGlob.globSync('./js/**/**.{ts,tsx}');
 
 /** @type {import('esbuild').BuildOptions} */
 const options = {
 	entryPoints,
 	minify: process.env.NODE_ENV === 'production',
-	outdir: './js-built',
+	outdir: './built/js',
 	target: 'es2022',
 	platform: 'browser',
 	format: 'esm',
 	sourcemap: 'linked',
+	tsconfig: 'tsconfig.web.json',
 };
 
 const args = process.argv.slice(2).map(arg => arg.toLowerCase());
 
-// js-built配下をすべて削除する
+// built配下をすべて削除する
 if (!args.includes('--no-clean')) {
-	fs.rmSync('./js-built', { recursive: true, force: true });
+	fs.rmSync('./built/js', { recursive: true, force: true });
 }
 
 if (args.includes('--watch')) {
@@ -54,7 +55,7 @@ async function buildSrc() {
 		await buildDts();
 	}
 
-	fs.copyFileSync('./js/emojilist.json', './js-built/emojilist.json');
+	fs.copyFileSync('./js/emojilist.json', './built/js/emojilist.json');
 
 	console.log(`[${_package.name}] finish building.`);
 }
@@ -63,8 +64,8 @@ function buildDts() {
 	return execa(
 		'tsc',
 		[
-			'--project', 'tsconfig.json',
-			'--outDir', 'js-built',
+			'--project', 'tsconfig.web.json',
+			'--outDir', './built/js',
 			'--declaration', 'true',
 			'--emitDeclarationOnly', 'true',
 		],
