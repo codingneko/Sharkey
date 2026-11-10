@@ -408,6 +408,7 @@ export class NoteEntityService implements OnModuleInit {
 		me?: { id: MiUser['id'] } | null | undefined,
 		options?: {
 			detail?: boolean;
+			recurseRenote?: boolean;
 			skipHide?: boolean;
 			withReactionAndUserPairCache?: boolean;
 			_hint_?: {
@@ -430,6 +431,7 @@ export class NoteEntityService implements OnModuleInit {
 			skipHide: false,
 			withReactionAndUserPairCache: false,
 		}, options);
+		opts.recurseRenote ??= opts.detail;
 
 		const meId = me ? me.id : null;
 		const note = typeof src === 'object' ? src : await this.noteLoader.load(src);
@@ -521,8 +523,9 @@ export class NoteEntityService implements OnModuleInit {
 					_hint_: options?._hint_,
 				}) : undefined,
 
-				renote: note.renoteId ? this.pack(note.renote ?? opts._hint_?.notes.get(note.renoteId) ?? note.renoteId, me, {
+				renote: opts.recurseRenote && note.renoteId ? this.pack(note.renote ?? opts._hint_?.notes.get(note.renoteId) ?? note.renoteId, me, {
 					detail: true,
+					recurseRenote: false,
 					skipHide: opts.skipHide,
 					withReactionAndUserPairCache: opts.withReactionAndUserPairCache,
 					_hint_: options?._hint_,
